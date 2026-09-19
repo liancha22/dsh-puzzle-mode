@@ -122,9 +122,12 @@ ln -s ~/.dsh/plugin-src/dsh-puzzle-mode <profile>/node_modules/dsh-puzzle-mode
 
 ```bash
 npm test
-# 四组，都不需要 Cordis 运行时或浏览器：
-#   test/puzzle.test.mjs   目录守卫、多文档创建、小节合并、计分定值、固定收尾问
-#   test/client.test.mjs   浏览器 bundle 格式、两个 Slot 的注册契约、首渲染
-#   test/pre-step.test.mjs 只拼不写拦截 / 边拼边写放行
-#   test/rpc.test.mjs      /puzzle-mode-rpc 的鉴权、参数与返回值
+# 四组，都不需要 Cordis 运行时或浏览器（跑到最后一组时，按文件名顺序执行）：
+#   test/10-puzzle.test.mjs   目录守卫、多文档创建、小节合并、计分定值、固定收尾问
+#   test/20-client.test.mjs   浏览器 bundle 格式、两个 Slot 的注册契约、首渲染
+#   test/30-rpc.test.mjs      /puzzle-mode-rpc 的鉴权、参数与返回值
+#   test/40-pre-step.test.mjs 只拼不写拦截 / 边拼边写放行
 ```
+
+最后一组要 import 宿主半，因此需要 `@deepseek-ai/dsh-tools` 能被解析——也就是插件已装进
+某个 DSH profile（运行时提供）。在没装 DSH 的裸目录里跑，这一组会明确输出跳过原因而不是报错。

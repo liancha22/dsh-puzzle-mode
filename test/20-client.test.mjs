@@ -5,7 +5,7 @@
  * 最小 window/document/React 替身，真的把 factory 跑起来、再真的调一次 `apply`，
  * 验证两个 Slot 注册的 id/order/name 都符合契约。
  *
- *   node test/client.test.mjs
+ *   node test/20-client.test.mjs
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

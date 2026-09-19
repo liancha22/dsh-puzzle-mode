@@ -1,7 +1,7 @@
 /**
  * dsh-puzzle-mode 纯逻辑测试（无 Cordis 依赖）。
  *
- *   node test/puzzle.test.mjs
+ *   node test/10-puzzle.test.mjs
  *
  * 覆盖：目录守卫、建项目（多份文档）、小节合并、模块写入、模式写入、
  * 以及确定性完整度算法的几个定值。

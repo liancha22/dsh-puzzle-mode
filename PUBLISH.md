@@ -8,6 +8,7 @@
 | --- | --- |
 | 仓库 | <https://github.com/liancha22/dsh-puzzle-mode>（public） |
 | 版本 | v0.1.0（首个可装版本） |
+| Release | <https://github.com/liancha22/dsh-puzzle-mode/releases/tag/v0.1.0> |
 | npm | **未发布**（本机装的是 GitHub 源） |
 | 测试 | 25 项通过（4 组，无需 Cordis 运行时或浏览器） |
 | 依赖 | 无。只 peer 依赖 `@deepseek-ai/dsh-tools`（运行时提供） |

@@ -2,7 +2,7 @@
  * RPC 路由测试：把宿主半注册的 `/puzzle-mode-rpc` 处理器截下来，用假的 req/res 驱动。
  * 覆盖：鉴权拒绝、非 POST、坏正文、缺 sessionId、state、mode、未知 method。
  *
- *   node test/rpc.test.mjs
+ *   node test/30-rpc.test.mjs
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'

@@ -19,7 +19,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/puzzle.test.mjs && node test/client.test.mjs && node test/pre-step.test.mjs && node test/rpc.test.mjs"
+    "test": "node test/10-puzzle.test.mjs && node test/20-client.test.mjs && node test/30-rpc.test.mjs && node test/40-pre-step.test.mjs"
   },
   "keywords": [
     "dsh",
