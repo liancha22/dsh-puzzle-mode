@@ -14,14 +14,26 @@
 
 ## 1. 别人怎么装（GitHub 源，推荐）
 
+**前提：仓库必须 public** —— 下载器不带鉴权（匿名请求 `api.github.com`），私有仓库在别人机器上拉不到。
+
 ```bash
-dsh plugin --profile web add https://github.com/liancha22/dsh-puzzle-mode
-# 重启该 profile；重启后刷新浏览器页面
-dsh plugin --profile web remove dsh-puzzle-mode   # 卸载
+# 1) 插件管理器（App 的插件页「添加插件」用的就是它）
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.1.0   # 指定标签/分支
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib # 分支 + 子目录
+
+# 2) dsh CLI：来源前缀 + owner + repo
+dsh plugin --profile web add github liancha22 dsh-puzzle-mode
+
+# 3) 通过 git（走 pnpm 的 git 依赖）
+dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ```
 
+装完**重启该 profile**（`patchReload: startup`），然后刷新浏览器页面。
 `dsh plugin add` 会做三件事：把包放进 profile 的 `node_modules`、写进 `package.json` 的
 `dependencies`、按包内 `dsh.bundle.patch` 把一行 `insert` 合并进 profile 组合。
+
+卸载：`dsh plugin --profile web remove dsh-puzzle-mode`（或插件页删除），再重启。
 
 ## 2. 手工装（离线 / 自测）
 

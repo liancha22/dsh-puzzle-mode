@@ -79,12 +79,23 @@
       name: 'dsh-puzzle-mode'
 ```
 
-**A. 从 GitHub（推荐）**
+**A. 从 GitHub（推荐，仓库必须 public）**
+
+插件管理器直接下 GitHub 源码包，三种等价写法：
 
 ```bash
-dsh plugin --profile web add https://github.com/liancha22/dsh-puzzle-mode
-# 重启该 profile 生效；重启后刷新浏览器页面
+# 1) 插件管理器（App 的插件页用的就是它）
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.1.0   # 指定标签/分支
+
+# 2) dsh CLI：来源前缀 + owner + repo
+dsh plugin --profile web add github liancha22 dsh-puzzle-mode
+
+# 3) 通过 git（走 pnpm 的 git 依赖）
+dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ```
+
+装完**重启该 profile**（`patchReload: startup`），然后刷新浏览器页面。
 
 **B. 本地目录（开发 / 自测）**
 
