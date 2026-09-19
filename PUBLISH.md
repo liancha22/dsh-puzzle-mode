@@ -18,15 +18,12 @@
 **前提：仓库必须 public** —— 下载器不带鉴权（匿名请求 `api.github.com`），私有仓库在别人机器上拉不到。
 
 ```bash
-# 1) 插件管理器（App 的插件页「添加插件」用的就是它）
+# 1) 插件管理器（App 插件页「添加插件」用的就是它；支持标签/分支/子目录）
 python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode
 python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.1.0   # 指定标签/分支
 python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib # 分支 + 子目录
 
-# 2) dsh CLI：来源前缀 + owner + repo
-dsh plugin --profile web add github liancha22 dsh-puzzle-mode
-
-# 3) 通过 git（走 pnpm 的 git 依赖）
+# 2) dsh CLI 走 pnpm，只认 npm 名或 git 协议（不认 owner/repo）
 dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ```
 
