@@ -1,0 +1,9 @@
+# dsh-puzzle-mode bundle patch —— 一行宿主插件。
+#
+# 为什么是宿主平面：本插件注册一个模型工具（skills 平面之外的 `puzzle_mode`）、
+# 一段 systemPrompt 规则、以及一个供浏览器半只读查询的 HTTP 路由；
+# 三者都必须在 DSH 进程里只存在一份，所以整行放在宿主组成，不进任何 preset。
+# 浏览器半由 package.json 的 dsh.client 声明被发现，随本行一起加载。
+- insert:
+    - id: dsh-puzzle-mode
+      name: 'dsh-puzzle-mode'

@@ -1,0 +1,55 @@
+{
+  "name": "dsh-puzzle-mode",
+  "version": "0.1.0",
+  "description": "DSH 插件：拼图模式——AI 主动提问并把项目拆成「主文档 + 若干模块文档」，带两种执行模式（只拼不写 / 边拼边写）与一个显示完整度和图块的拼图面板。",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "test",
+    "cordis.patch.yml",
+    "README.md",
+    "PUBLISH.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/puzzle.test.mjs && node test/client.test.mjs && node test/pre-step.test.mjs && node test/rpc.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "puzzle",
+    "project-docs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liancha22/dsh-puzzle-mode.git"
+  },
+  "homepage": "https://github.com/liancha22/dsh-puzzle-mode#readme",
+  "bugs": {
+    "url": "https://github.com/liancha22/dsh-puzzle-mode/issues"
+  },
+  "author": "liancha22 <1784351702@qq.com>"
+}
