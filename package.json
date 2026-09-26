@@ -1,6 +1,6 @@
 {
   "name": "dsh-puzzle-mode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH 插件：拼图模式——AI 主动提问并把项目拆成「主文档 + 若干模块文档」，带两种执行模式（只拼不写 / 边拼边写）与一个显示完整度和图块的拼图面板。",
   "license": "MIT",
   "type": "module",
