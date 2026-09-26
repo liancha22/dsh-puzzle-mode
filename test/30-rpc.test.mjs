@@ -1,15 +1,26 @@
 /**
  * RPC 路由测试：把宿主半注册的 `/puzzle-mode-rpc` 处理器截下来，用假的 req/res 驱动。
- * 覆盖：鉴权拒绝、非 POST、坏正文、缺 sessionId、state、mode、未知 method。
+ * 覆盖：鉴权拒绝、非 POST、坏正文、缺 sessionId、state / list / module / mode、未知 method。
  *
  *   node test/30-rpc.test.mjs
+ *
+ * 宿主半 import 了 `@deepseek-ai/dsh-tools`（由 DSH 运行时提供）。在没装 DSH 的
+ * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createProject, readState } from '../lib/puzzle.js'
-import * as host from '../lib/index.js'
+
+let host
+try {
+  host = await import('../lib/index.js')
+} catch (error) {
+  const code = error === null || error === undefined ? undefined : error.code
+  console.log(`skip 30-rpc.test.mjs：${code === 'ERR_MODULE_NOT_FOUND' ? '找不到 @deepseek-ai/dsh-tools（本目录未装进 DSH profile），跳过' : String(error && error.message ? error.message : error)}`)
+  process.exit(0)
+}
 
 const root = mkdtempSync(join(tmpdir(), 'puzzle-rpc-'))
 let passed = 0
