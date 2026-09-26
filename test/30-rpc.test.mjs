@@ -8,10 +8,10 @@
  * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createProject, readState } from '../lib/puzzle.js'
+import { boundProject, createProject, readState } from '../lib/puzzle.js'
 
 let host
 try {
@@ -414,6 +414,43 @@ try {
     assert.deepEqual(readState(root, 'ui-created').sessions, [])
     assert.deepEqual(readState(root, 'tool-made').sessions, ['session-ui'])
     ok('op:init → 建项目并改绑本会话')
+  }
+
+  {
+    // op:unbind：解绑后回到空，且文档留着。
+    const tool = captureTool()
+    const exec = { agent: { session: { id: 'session-ui' } } }
+    assert.equal(boundProject(root, 'session-ui'), 'tool-made')
+    const out = await tool.execute({ op: 'unbind' }, exec)
+    assert.equal(out.ok, true)
+    assert.equal(out.unbound, true)
+    assert.deepEqual(out.released, ['tool-made'])
+    assert.equal(out.initialized, false, '解绑后应回到未绑定态')
+    assert.equal(out.projectSource, 'none')
+    assert.equal(boundProject(root, 'session-ui'), null)
+    assert.ok(existsSync(join(root, 'tool-made', '拼图', '主文档.md')), '解绑不删文档')
+    ok('op:unbind → 回到空绑定，文档留着')
+  }
+
+  {
+    // RPC unbind：面板的解绑按钮走这条。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'unbind', sessionId: 'session-rabbit' }) })
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.unbound, true)
+    assert.equal(boundProject(root, 'session-rabbit'), null)
+    assert.equal(out.body.result.initialized, false)
+    ok('RPC unbind → 面板解绑')
+  }
+
+  {
+    // RPC create 的模块名切分交给前端，但后端要能拿到数组并如实回报。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'create', sessionId: 'session-form', project: 'form-made', modules: ['a', 'b'], goal: '表单' }) })
+    assert.equal(out.body.ok, true)
+    assert.deepEqual(out.body.result.createdModules, ['a', 'b'])
+    assert.deepEqual(readState(root, 'form-made').sessions, ['session-form'])
+    ok('RPC create 带多个模块 → 建齐并绑定')
   }
 
   console.log(`\n${passed} 项通过`)

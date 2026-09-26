@@ -103,7 +103,7 @@ const mod = loaded.factory((name) => {
 assert.equal(typeof mod.apply, 'function')
 assert.equal(typeof mod.questionTemplate, 'function', '提问模板必须可测（导出）')
 assert.equal(typeof mod.auditTemplate, 'function', '审查模板必须可测（导出）')
-for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate']) {
+for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate', 'createByForm', 'unbind']) {
   assert.equal(typeof mod[name], 'function', name + ' 必须可测（导出）')
 }
 
@@ -117,6 +117,7 @@ for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate']) {
   // 提问数上限从 3 提到 5：模板要给出 5 个槽位。
   for (const n of ['1. ', '2. ', '3. ', '4. ', '5. ']) assert.ok(text.includes(n), `模板要有第 ${n} 个提问槽`)
   assert.ok(!text.includes('6. '), '不该有第 6 个槽位（上限 5）')
+  assert.ok(text.includes('ask_user_question'), '提问模板必须点名用提问工具（正文里列选项不算提问）')
 }
 
 {
@@ -364,3 +365,28 @@ bindButton.props.onClick()
 await flush()
 assert.ok(emptyRequests.some((item) => item.method === 'bind' && item.project === 'demo'), '点绑定要发 method:bind')
 console.log('ok   空态：快速建空壳 / 采访后再建 / 绑定已有项目（都走 setDraft 或 RPC，不自动提交）')
+
+// 表单直建：三个输入框 + 「立刻建」按钮必须在场（值由 store 驱动，见下）。
+const formInputs = findAll(emptyTree, (node) => typeof node === 'object' && node.type === 'input')
+assert.equal(formInputs.length, 3, '空态表单要有三个输入框（项目名 / 模块名 / 目标）')
+assert.ok(formInputs.every((node) => typeof node.props.onChange === 'function'), '三个输入框都要能改（onChange 在场）')
+const createButton = findAll(emptyTree, (node) => typeof node === 'object' && node.type === 'button' && Array.isArray(node.children) && node.children.some((child) => child === '立刻建'))[0]
+assert.ok(createButton !== undefined, '空态要有「立刻建」（表单直建）')
+assert.equal(typeof emptyMod.createByForm, 'function', '表单直建要可测（导出）')
+// 直接驱动导出的 createByForm：假 React 的 setState 是空函数，改不了 store 里的表单值，
+// 所以这里传一个自定义 view —— 这正是把它导出的理由。
+const beforeCreate = emptyRequests.filter((item) => item.method === 'create').length
+emptyMod.createByForm({ state: { sessionId: 'session-form', formProject: '   ', formModules: 'a', formGoal: '' } })
+await flush()
+assert.equal(emptyRequests.filter((item) => item.method === 'create').length, beforeCreate, '项目名为空时不该发 create')
+emptyMod.createByForm({ state: { sessionId: undefined, formProject: 'x' } })
+await flush()
+assert.equal(emptyRequests.filter((item) => item.method === 'create').length, beforeCreate, '没有会话 ID 时不该发 create')
+emptyMod.createByForm({ state: { sessionId: 'session-form', formProject: ' 表单项目 ', formModules: 'a, b、c d', formGoal: ' 一句话 ' } })
+await flush()
+const created = emptyRequests.filter((item) => item.method === 'create')
+assert.equal(created.length, beforeCreate + 1, '填好后要发 create')
+assert.equal(created[created.length - 1].project, '表单项目', '项目名要去首尾空格')
+assert.deepEqual(created[created.length - 1].modules, ['a', 'b', 'c', 'd'], '模块名按逗号/顿号/空格切')
+assert.equal(created[created.length - 1].goal, '一句话')
+console.log('ok   空态表单直建：三个输入框在场，填名 → 发 method:create（不经过模型，模块名按分隔符切）')

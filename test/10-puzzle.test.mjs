@@ -42,6 +42,7 @@ import {
   slugify,
   summarize,
   summarizeList,
+  unbindSession,
   updateMainSection,
   updateModuleSection,
   updateProjectHealth,
@@ -520,6 +521,71 @@ try {
     assert.deepEqual(parseSessionList({ [SESSION_FIELD]: '{"a":1}' }), [])
     assert.deepEqual(parseSessionList({ [SESSION_FIELD]: '["a","a","", 3]' }), ['a'])
     assert.deepEqual(parseSessionList(null), [])
+  })
+
+  check('解绑：从所有项目上摘掉本会话（op:unbind）', () => {
+    const unRoot = mkdtempSync(join(tmpdir(), 'puzzle-unbind-'))
+    try {
+      createProject(unRoot, 'un-a', '甲', ['m1'], MODE_PUZZLE_ONLY, 'sess-u')
+      bindSession(unRoot, 'un-a', 'sess-keep')
+      assert.equal(boundProject(unRoot, 'sess-u'), 'un-a')
+      const cut = unbindSession(unRoot, 'sess-u')
+      assert.equal(cut.ok, true)
+      assert.deepEqual(cut.released, ['un-a'])
+      assert.equal(boundProject(unRoot, 'sess-u'), null, '解绑后必须回到没绑定')
+      // 这个项目上还绑着 sess-keep：解绑只摘掉自己的 id，不能把别人的一起带走。
+      assert.deepEqual(readState(unRoot, 'un-a').sessions, ['sess-keep'], '解绑后不该留下自己的 id')
+      assert.equal(boundProject(unRoot, 'sess-keep'), 'un-a', '别的会话不受影响')
+      // 文档与文件夹都留着——解绑只动 front-matter 那一行。
+      assert.ok(existsSync(join(unRoot, 'un-a', PUZZLE_DIR, '主文档.md')))
+      assert.ok(existsSync(join(unRoot, 'un-a', PUZZLE_DIR, '模块', 'm1.md')))
+      const again = unbindSession(unRoot, 'sess-u')
+      assert.equal(again.ok, true)
+      assert.deepEqual(again.released, [], '重复解绑是无操作，不报错')
+    } finally {
+      rmSync(unRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('解绑：多个项目上都有同一个 id 时全部摘掉', () => {
+    const manyRoot = mkdtempSync(join(tmpdir(), 'puzzle-unbind2-'))
+    try {
+      createProject(manyRoot, 'mb-a', '甲', ['m1'], MODE_PUZZLE_ONLY, 'sess-m')
+      createProject(manyRoot, 'mb-b', '乙', ['m1'], MODE_PUZZLE_ONLY, 'sess-other')
+      // 「同一个 id 出现在两个项目上」用公开 API 造不出来——bindSession 会先解绑。
+      // 这种状态只可能来自手工编辑或旧版插件，所以这里直接改文件来复现。
+      const otherDoc = join(manyRoot, 'mb-b', PUZZLE_DIR, '主文档.md')
+      const text = readFileSync(otherDoc, 'utf8')
+      assert.ok(!readState(manyRoot, 'mb-b').sessions.includes('sess-m'))
+      // mb-b 已有 `会话: ["sess-other"]` 一行：替换它（不能新插一行——front-matter 是逐行
+      // 解析的，同名字段后者覆盖前者，插进去等于没写）。
+      writeFileSync(otherDoc, text.replace(/^会话: .*$/m, '会话: ["sess-other","sess-m"]'), 'utf8')
+      assert.ok(readState(manyRoot, 'mb-b').sessions.includes('sess-m'), '前提：两处都有 sess-m')
+      assert.equal(boundProject(manyRoot, 'sess-m'), 'mb-b')
+
+      const cut = unbindSession(manyRoot, 'sess-m')
+      assert.equal(cut.ok, true)
+      assert.deepEqual(cut.released.sort(), ['mb-a', 'mb-b'], '两处都要摘掉')
+      assert.equal(boundProject(manyRoot, 'sess-m'), null)
+      assert.deepEqual(readState(manyRoot, 'mb-a').sessions, [])
+      // mb-b 上本来就绑着 sess-other：解绑只摘掉 sess-m，别人的 id 必须留下。
+      assert.deepEqual(readState(manyRoot, 'mb-b').sessions, ['sess-other'])
+      assert.equal(boundProject(manyRoot, 'sess-other'), 'mb-b', '别的会话不受影响')
+    } finally {
+      rmSync(manyRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('解绑：缺会话 ID 时不写任何文件', () => {
+    const badRoot = mkdtempSync(join(tmpdir(), 'puzzle-unbind3-'))
+    try {
+      createProject(badRoot, 'bad-a', '甲', ['m1'], MODE_PUZZLE_ONLY, 'sess-b')
+      const cut = unbindSession(badRoot, '')
+      assert.equal(cut.ok, false)
+      assert.equal(boundProject(badRoot, 'sess-b'), 'bad-a', '拒绝时不该动到任何绑定')
+    } finally {
+      rmSync(badRoot, { recursive: true, force: true })
+    }
   })
 
   console.log(`\n${passed} 项通过`)
