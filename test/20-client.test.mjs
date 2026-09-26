@@ -17,6 +17,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
+const DIMENSION_NAMES = ['任务复杂度', '可拓展性', '维护系数', '代码质量', '可复用性']
 const source = readFileSync(join(here, '..', 'lib', 'client.js'), 'utf8')
 
 let loaded = null
@@ -63,20 +64,16 @@ const fakeFetch = (url, options) => {
       project: 'demo',
       mode: '只拼不写',
       modeSource: 'front-matter',
-      overall: 50,
+      health: 62,
+      dimensions: { complexity: 34, extensibility: 40, maintenance: 44, quality: 88, reusability: 20 },
       cwdSource: 'session',
       projectSource: 'latest',
-      modules: [{ name: 'auth-flow', exists: true, score: 80, counts: { points: 2, pending: 1, decided: 0 } }],
-      pieces: [
-        { id: 'init', kind: 'init', name: '初始化', score: 100, max: 100 },
-        { id: 'decided', kind: 'main', name: '已定', score: 60, max: 100, counts: { items: 3 } },
-        { id: 'module:auth-flow', kind: 'module', name: 'auth-flow', score: 80, max: 100, exists: true, counts: { points: 2 } },
-      ],
+      modules: [{ name: 'auth-flow', exists: true, health: 62, dimensions: {}, counts: { points: 2, pending: 1, decided: 0 } }],
     }
   } else if (body.method === 'list') {
-    result = { ok: true, projectCount: 2, defaultProject: 'demo', projects: [{ name: 'demo', overall: 50 }, { name: 'second', overall: 10 }] }
+    result = { ok: true, projectCount: 2, defaultProject: 'demo', projects: [{ name: 'demo', health: 62 }, { name: 'second', health: 10 }] }
   } else if (body.method === 'module') {
-    result = { ok: true, name: body.name, exists: true, score: 80, points: '要点一', related: '- [ ] 待定', detail: '详细一' }
+    result = { ok: true, name: body.name, exists: true, health: 62, dimensions: { complexity: 34, extensibility: 40, maintenance: 44, quality: 88, reusability: 20 }, points: '要点一', related: '- [ ] 待定', detail: '详细一' }
   } else {
     result = { ok: true, mode: body.mode }
   }
@@ -186,19 +183,24 @@ assert.ok(panelTree !== null, '点开后应渲染面板')
 
 // 面板里必须已经能拿到 inputActions（从按钮 Slot 传过来）。
 // 通过「点提问模板按钮 → setDraft 被调用」来验证，而不是读内部状态。
+/**
+ * 深度遍历渲染树。注意：**字符串子节点也要参与匹配**，
+ * 否则 `h('span', null, '50%')` 里的文本永远找不到。
+ */
 function findAll(node, predicate, out = []) {
-  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (node === null || node === undefined) return out
   if (Array.isArray(node)) {
     for (const child of node) findAll(child, predicate, out)
     return out
   }
   if (predicate(node)) out.push(node)
+  if (typeof node !== 'object') return out
   findAll(node.children, predicate, out)
   return out
 }
 
-const buttons = findAll(panelTree, (node) => node.type === 'button' && typeof node.props.onClick === 'function')
-const templateButton = buttons.find((node) => node.children.some((child) => child === '提问模板'))
+const buttons = findAll(panelTree, (node) => typeof node === 'object' && node.type === 'button' && node.props !== undefined && typeof node.props.onClick === 'function')
+const templateButton = buttons.find((node) => Array.isArray(node.children) && node.children.some((child) => child === '提问模板'))
 assert.ok(templateButton !== undefined, '面板里必须有「提问模板」按钮')
 
 /* --------------------------- 图块可点开看详情 --------------------------- */
@@ -209,7 +211,7 @@ assert.ok(requests.some((item) => item.body.method === 'list'), '打开面板应
 
 // 找到模块图块并点它。注意顺序：点「提问模板」会关闭面板（这是设计），
 // 所以图块相关断言必须放在那之前。
-const tiles = findAll(panelTree, (node) => node.type === 'button' && node.props['data-static'] === '0')
+const tiles = findAll(panelTree, (node) => typeof node === 'object' && node.type === 'button' && node.props !== undefined && node.props['data-static'] === '0')
 assert.ok(tiles.length >= 1, '模块图块必须是可点的（data-static=0）')
 const before = requests.filter((item) => item.body.method === 'module').length
 tiles[0].props.onClick()
@@ -220,11 +222,16 @@ assert.equal(after[after.length - 1].body.name, 'auth-flow')
 
 // 详情渲染出来后应包含文档内容。
 const panelTree3 = panel[2]({})
-assert.ok(findAll(panelTree3, (node) => node.children.includes('要点一')).length >= 1, '详情应显示模块要点')
+assert.ok(findAll(panelTree3, (node) => Array.isArray(node.children) && node.children.includes('要点一')).length >= 1, '详情应显示模块要点')
 
-// 初始化块不可点（没有详情可读）。
-const staticTiles = findAll(panelTree3, (node) => node.type === 'button' && node.props['data-static'] === '1')
-assert.ok(staticTiles.length >= 1, '主文档节/初始化块应保持静态')
+// 面板必须渲染五维（跨模块均值），且不再出现旧的「完整度/overall」字样。
+const dimNames = findAll(panelTree3, (node) => typeof node === 'string' && DIMENSION_NAMES.includes(node))
+// 五维名在「跨模块均值」区块出现一次；模块详情展开时还会再出现一次，
+// 所以这里断言「五个维度名都出现过」，而不是「恰好出现 5 次」。
+for (const name of DIMENSION_NAMES) assert.ok(dimNames.includes(name), `面板必须渲染「${name}」`)
+const dimVals = findAll(panelTree3, (node) => typeof node === 'string' && /^\d+%$/.test(node))
+assert.ok(dimVals.length >= 5, '五维都要有百分比')
+assert.equal(findAll(panelTree3, (node) => typeof node === 'string' && node.includes('完整度')).length, 0, '不该再出现「完整度」')
 
 /* --------------------- 提问模板（放在最后：它会关面板） --------------------- */
 

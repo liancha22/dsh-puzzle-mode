@@ -154,8 +154,11 @@ try {
     assert.equal(out.body.result.project, 'demo')
     assert.equal(out.body.result.askPause, true)
     assert.equal(out.body.result.pauseQuestion, '要不要先停下？')
-    assert.ok(out.body.result.pieces.length >= 8)
-    ok('state → 返回完整度与图块')
+    assert.equal(typeof out.body.result.health, 'number')
+    assert.equal(out.body.result.dimensionMeta.length, 5, 'state 必须带五维元信息')
+    assert.equal(typeof out.body.result.dimensions, 'object')
+    assert.ok(out.body.result.modules.length >= 1)
+    ok('state → 返回项目健康性与五维')
   }
 
   {
@@ -199,7 +202,9 @@ try {
     assert.equal(out.body.ok, true)
     assert.equal(out.body.result.exists, true)
     assert.equal(typeof out.body.result.detail, 'string')
-    ok('module → 返回模块详情')
+    assert.equal(typeof out.body.result.health, 'number', 'module 详情要带健康性')
+    assert.equal(Object.keys(out.body.result.dimensions).length, 5, 'module 详情要带五维')
+    ok('module → 返回模块详情与五维')
   }
 
   {

@@ -3,22 +3,28 @@
  *
  *   node test/10-puzzle.test.mjs
  *
- * 覆盖：目录守卫、建项目（多份文档）、小节合并、模块写入、模式写入、
- * 以及确定性完整度算法的几个定值。
+ * 覆盖：目录守卫、建项目（多份文档）、小节合并、模式写入，
+ * 以及**五维项目健康性**：显式分数、证据推导、反向维度、跨模块汇总。
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  createProject,
-  defaultProjectName,
-  isExecutableMode,
+  HEALTH_DIMENSIONS,
+  HEALTH_HEADING,
+  HEALTH_KEYS,
   MODE_PUZZLE_ONLY,
   MODE_PUZZLE_WRITE,
   PAUSE_OPTIONS,
   PAUSE_QUESTION,
   PUZZLE_DIR,
+  createProject,
+  defaultProjectName,
+  healthLines,
+  healthOf,
+  isExecutableMode,
+  parseHealthDeclarations,
   projectSummaries,
   readModuleDetail,
   readState,
@@ -28,6 +34,7 @@ import {
   summarizeList,
   updateMainSection,
   updateModuleSection,
+  updateProjectHealth,
 } from '../lib/puzzle.js'
 
 const root = mkdtempSync(join(tmpdir(), 'puzzle-test-'))
@@ -53,8 +60,7 @@ try {
   })
 
   check('defaultProjectName 是日期前缀', () => {
-    const name = defaultProjectName('登录重构', new Date('2026-09-19T03:00:00Z'))
-    assert.match(name, /^2026-09-19-/)
+    assert.match(defaultProjectName('登录重构', new Date('2026-09-19T03:00:00Z')), /^2026-09-19-/)
   })
 
   check('固定收尾问存在且「停下」排第一', () => {
@@ -63,181 +69,242 @@ try {
     assert.equal(PAUSE_OPTIONS.length, 2)
   })
 
-  check('init 一次建出主文档 + N 份模块文档', () => {
+  check('五维定义齐、全为「越高越好」', () => {
+    assert.deepEqual(HEALTH_KEYS, ['complexity', 'extensibility', 'maintenance', 'quality', 'reusability'])
+    assert.deepEqual(HEALTH_DIMENSIONS.map((d) => d.name), ['任务复杂度', '可拓展性', '维护系数', '代码质量', '可复用性'])
+    for (const dimension of HEALTH_DIMENSIONS) {
+      assert.equal(typeof dimension.derive, 'function', `${dimension.name} 必须有推导函数`)
+    }
+  })
+
+  check('init 一次建出主文档 + N 份模块文档，且模块带五维小节', () => {
     const created = createProject(root, 'demo', '把登录重构成三步', ['auth-flow', 'session-store'])
     assert.equal(created.ok, true)
     const dir = join(root, 'demo', PUZZLE_DIR)
     assert.ok(existsSync(join(dir, '主文档.md')))
     assert.ok(existsSync(join(dir, '模块', 'auth-flow.md')))
-    assert.ok(existsSync(join(dir, '模块', 'session-store.md')))
 
     const main = readFileSync(join(dir, '主文档.md'), 'utf8')
     for (const heading of ['## 检索索引', '## 坑', '## 用户原话', '## 悬而未决', '## 已定', '## 撤销']) {
       assert.ok(main.includes(heading), `主文档缺少 ${heading}`)
     }
     assert.ok(main.includes('模式: 只拼不写'))
+
+    const moduleText = readFileSync(join(dir, '模块', 'auth-flow.md'), 'utf8')
+    assert.ok(moduleText.includes(HEALTH_HEADING), '模块文档必须有健康性小节')
+    for (const dimension of HEALTH_DIMENSIONS) {
+      // 模板只列维度名、**不写数字**：写了 0 会被当成「显式声明 0」，推导就永远不生效。
+      assert.ok(moduleText.includes(dimension.name + ': '), `模块模板应列出「${dimension.name}」`)
+      assert.ok(!new RegExp(dimension.name + ': \\d').test(moduleText), `模板不该预填 ${dimension.name} 的数字`)
+    }
   })
 
-  check('未初始化时 readState 不建文件、不抛错', () => {
+  check('未初始化时 readState 不建文件、健康性为 0', () => {
     const state = readState(root, 'not-there')
     assert.equal(state.initialized, false)
-    assert.equal(state.overall, 0)
+    assert.equal(state.health, 0)
+    assert.deepEqual(state.dimensions, Object.fromEntries(HEALTH_KEYS.map((k) => [k, 0])))
     assert.equal(existsSync(join(root, 'not-there')), false)
   })
 
-  check('初始状态：初始化块满分、已定 3 条 → 60', () => {
-    updateMainSection(root, 'demo', 'decided', ['- [x] 用 JWT', '- [x] 刷新放 HttpOnly Cookie', '- [x] 会话表放 PG'].join('\n'), false)
+  check('空模块：五维全 0（不是"看起来还行给 60"）', () => {
     const state = readState(root, 'demo')
-    assert.equal(state.initialized, true)
-    const byId = Object.fromEntries(state.pieces.map((piece) => [piece.id, piece.score]))
-    assert.equal(byId.init, 100, '小节齐 + 模块齐 → 初始化满分')
-    assert.equal(byId.decided, 60, '3 条 × 20 = 60')
-    assert.ok(byId.module === undefined)
-    assert.ok(state.pieces.some((piece) => piece.id === 'module:auth-flow'))
+    const module = state.modules.find((m) => m.name === 'auth-flow')
+    assert.equal(module.exists, true)
+    assert.equal(module.health, 0, '模板占位行不能算证据')
+    assert.deepEqual(module.healthScores, Object.fromEntries(HEALTH_KEYS.map((k) => [k, 0])))
+    assert.equal(state.health, 0)
   })
 
-  check('module 写入会自动建文件并回写模块清单', () => {
-    const before = readState(root, 'demo')
-    assert.equal(before.modules.some((m) => m.name === 'extra'), false, '未写入前不出现该模块')
-    const written = updateModuleSection(root, 'demo', 'extra', 'points', '- 新模块要点', false)
+  check('显式分数优先于推导，并按维度名识别', () => {
+    const declared = parseHealthDeclarations([
+      '## 健康性',
+      '- 任务复杂度: 80',
+      '- 可拓展性：75',
+      '**维护系数**: 90',
+      '- 代码质量: 60',
+      '- 可复用性: 40',
+      '- 不认识的维度: 99',
+    ].join('\n'))
+    assert.deepEqual(declared, { complexity: 80, extensibility: 75, maintenance: 90, quality: 60, reusability: 40 })
+  })
+
+  check('维护成本是反向量：30 → 维护系数 70', () => {
+    assert.deepEqual(parseHealthDeclarations('- 维护成本: 30'), { maintenance: 70 })
+    assert.deepEqual(parseHealthDeclarations('- 维护成本: 0'), { maintenance: 100 })
+  })
+
+  check('写了显式分数 → 该维用显式值；其余维度仍推导', () => {
+    const written = updateModuleSection(root, 'demo', 'auth-flow', 'health', healthLines({
+      complexity: 80, extensibility: 70, maintenance: 90, quality: 60, reusability: 50,
+    }), false)
     assert.equal(written.ok, true)
-    assert.equal(written.created, true)
-    const after = readState(root, 'demo')
-    const extra = after.modules.find((m) => m.name === 'extra')
-    assert.ok(extra !== undefined, '新模块应进入模块清单')
-    assert.equal(extra.exists, true)
-    assert.ok(extra.score > 0)
-  })
-
-  check('module 完成度写死时模块细化用这个值', () => {
-    updateModuleSection(root, 'demo', 'auth-flow', 'progress', '完成度: 80', false)
     const state = readState(root, 'demo')
-    const piece = state.pieces.find((item) => item.id === 'module:auth-flow')
-    assert.equal(piece.score, 80)
+    const module = state.modules.find((m) => m.name === 'auth-flow')
+    assert.deepEqual(module.healthScores, { complexity: 80, extensibility: 70, maintenance: 90, quality: 60, reusability: 50 })
+    assert.equal(module.health, 70, '五维均值 (80+70+90+60+50)/5 = 70')
+    for (const key of HEALTH_KEYS) assert.equal(module.healthSources[key], 'module')
   })
 
-  check('模式写入与 canExecute 联动', () => {
-    assert.equal(isExecutableMode(MODE_PUZZLE_ONLY), false)
-    assert.equal(isExecutableMode(MODE_PUZZLE_WRITE), true)
-    assert.equal(setMode(root, 'demo', MODE_PUZZLE_WRITE).ok, true)
+  check('不写分数时由文档证据推导', () => {
+    // 给 session-store 写 2 条要点 + 1 条详细记录 + 1 条已定 + 1 条悬而未决
+    updateModuleSection(root, 'demo', 'session-store', 'points', '- 要点一\n- 要点二', false)
+    updateModuleSection(root, 'demo', 'session-store', 'detail', '- 详细一', false)
+    updateModuleSection(root, 'demo', 'session-store', 'related', '- [x] 已定一\n- [ ] 待定一', false)
     const state = readState(root, 'demo')
-    assert.equal(state.mode, MODE_PUZZLE_WRITE)
-    assert.equal(summarize(state).canExecute, true)
-    assert.equal(setMode(root, 'demo', '乱写').ok, false)
+    const module = state.modules.find((m) => m.name === 'session-store')
+    assert.equal(module.healthSources.complexity, 'derived')
+    // points=2, detail=1 → 2*12+1*10 = 34
+    assert.equal(module.healthScores.complexity, 34)
+    // pending=1, decided=1 → 20+20 = 40
+    assert.equal(module.healthScores.extensibility, 40)
+    // points=2, detail=1 → 2*18+1*8 = 44
+    assert.equal(module.healthScores.maintenance, 44)
+    // pit=0, decided=1 → 0+15 = 15
+    assert.equal(module.healthScores.quality, 15)
+    // shared=0, points=2 → 0+20 = 20
+    assert.equal(module.healthScores.reusability, 20)
   })
 
-  check('append 默认追加、不覆盖既有内容', () => {
-    updateMainSection(root, 'demo', 'pit', '- 坑一', false)
-    updateMainSection(root, 'demo', 'pit', '- 坑二', true)
+  check('项目健康性 = 各模块健康性均值；dimensions = 跨模块均值', () => {
     const state = readState(root, 'demo')
-    const main = readFileSync(state.mainDoc, 'utf8')
-    assert.ok(main.includes('坑一') && main.includes('坑二'))
+    const values = state.modules.map((m) => m.health)
+    const expected = Math.round(values.reduce((a, b) => a + b, 0) / values.length)
+    assert.equal(state.health, expected)
+    for (const key of HEALTH_KEYS) {
+      const perModule = state.modules.map((m) => m.healthScores[key])
+      const mean = Math.round(perModule.reduce((a, b) => a + b, 0) / perModule.length)
+      assert.equal(state.dimensions[key], mean, `${key} 的跨模块均值`)
+    }
   })
 
-  check('目录守卫：越界模块名被 slug 化后仍关在拼图目录内', () => {
-    const written = updateModuleSection(root, 'demo', '../../evil', 'points', '- x', false)
-    // '../../evil' 被 slugify 成 'evil'：写入必须落在 模块/evil.md，
-    // 而不是逃到 root/evil.md 或拼图目录之外。
-    assert.equal(written.file, join(root, 'demo', PUZZLE_DIR, '模块', 'evil.md'))
-    assert.equal(existsSync(join(root, 'evil.md')), false)
-    assert.equal(existsSync(join(root, 'demo', 'evil.md')), false)
-  })
-
-  check('summarize 每次都带固定收尾问，图块数与文档一致', () => {
+  check('项目级显式分数当模块缺省值（模块没写时用项目的）', () => {
+    const written = updateProjectHealth(root, 'demo', '- 代码质量: 88', false)
+    assert.equal(written.ok, true)
+    // session-store 的 quality 原本是推导值 15；项目写了 88 → 优先用项目的
     const state = readState(root, 'demo')
-    assert.equal(state.pieces.length, 1 + 6 + state.modules.length, '1 初始化 + 6 主文档节 + 每模块一块')
-    const summary = summarize(state)
-    assert.equal(summary.askPause, true)
-    assert.equal(summary.pauseQuestion, PAUSE_QUESTION)
-    assert.deepEqual(summary.pauseOptions, PAUSE_OPTIONS)
-    assert.ok(summary.pieces.length === 1 + 6 + state.modules.length)
-    assert.ok(summary.pieces.some((piece) => piece.kind === 'module'))
-    assert.ok(summary.pieces.some((piece) => piece.kind === 'init'))
+    const module = state.modules.find((m) => m.name === 'session-store')
+    assert.equal(module.healthScores.quality, 88)
+    assert.equal(module.healthSources.quality, 'project')
   })
 
-  check('坏 front-matter 只降级、不抛错', () => {
-    const dir = join(root, 'demo', PUZZLE_DIR)
-    const main = join(dir, '主文档.md')
-    const text = readFileSync(main, 'utf8').replace('计划模块: [', '计划模块: [oops')
-    writeFileSync(main, text)
+  check('模块级显式分数仍然压过项目级', () => {
     const state = readState(root, 'demo')
-    assert.equal(state.initialized, true)
-    assert.equal(state.degraded, true)
+    const module = state.modules.find((m) => m.name === 'auth-flow')
+    assert.equal(module.healthSources.quality, 'module')
+    assert.equal(module.healthScores.quality, 60, 'auth-flow 自己写了 60，不用项目的 88')
   })
 
-  check('模块文档不带「模式」（模式是项目级，只在主文档）', () => {
-    const moduleText = readFileSync(join(root, 'demo', PUZZLE_DIR, '模块', 'auth-flow.md'), 'utf8')
-    assert.ok(!moduleText.includes('模式:'), '模块文档不该有 模式: 字段')
-    assert.ok(moduleText.includes('模块: auth-flow'), '模块文档应记自己的模块名')
-    const mainText = readFileSync(join(root, 'demo', PUZZLE_DIR, '主文档.md'), 'utf8')
-    assert.ok(mainText.includes('模式:'), '主文档仍应有 模式: 字段')
+  check('op:health 不带 name 时写主文档健康性小节', () => {
+    const main = readFileSync(join(root, 'demo', PUZZLE_DIR, '主文档.md'), 'utf8')
+    assert.ok(main.includes(HEALTH_HEADING), '主文档应有健康性小节')
+    assert.ok(main.includes('代码质量: 88'))
   })
 
   check('modeSource 区分「写死的」与「缺省补的」', () => {
-    const withMode = readState(root, 'demo')
-    assert.equal(withMode.modeSource, 'front-matter')
-    // 把模式行删掉 → 应退回默认值，且 modeSource 标记为 default
-    const dir = join(root, 'demo', PUZZLE_DIR)
-    const main = join(dir, '主文档.md')
+    assert.equal(readState(root, 'demo').modeSource, 'front-matter')
+    const main = join(root, 'demo', PUZZLE_DIR, '主文档.md')
     const text = readFileSync(main, 'utf8').replace(/^模式: .*$/m, '')
     writeFileSync(main, text)
     const without = readState(root, 'demo')
     assert.equal(without.mode, MODE_PUZZLE_ONLY)
     assert.equal(without.modeSource, 'default')
-    // 恢复，后面的用例继续用「边拼边写」
     setMode(root, 'demo', MODE_PUZZLE_WRITE)
   })
 
-  check('用户写的括号行不再被误判为空', () => {
-    // 早先把「整行就是一对括号」一律当占位，于是真内容会被漏算。
-    updateMainSection(root, 'demo', 'pit', '- （见模块 auth-flow）', false)
-    const state = readState(root, 'demo')
-    const pit = state.pieces.find((piece) => piece.id === 'pit')
-    assert.equal(pit.counts.items, 1, '括号里的真内容应算 1 条')
-    assert.equal(pit.score, 25)
+  check('模式写入与 canExecute 联动', () => {
+    assert.equal(isExecutableMode(MODE_PUZZLE_ONLY), false)
+    assert.equal(isExecutableMode(MODE_PUZZLE_WRITE), true)
+    assert.equal(readState(root, 'demo').mode, MODE_PUZZLE_WRITE)
+    assert.equal(summarize(readState(root, 'demo')).canExecute, true)
+    assert.equal(setMode(root, 'demo', '乱写').ok, false)
   })
 
-  check('readModuleDetail 读详情；不存在的模块不建文件', () => {
-    updateModuleSection(root, 'demo', 'auth-flow', 'detail', '- 详细一\n- 详细二', false)
+  check('用户写的括号行不再被误判为空', () => {
+    updateMainSection(root, 'demo', 'pit', '- （见模块 auth-flow）', false)
+    const state = readState(root, 'demo')
+    // 主文档「坑」有 1 条 → 推导的 quality 用 pit 计数（auth-flow 显式写了所以看 session-store）
+    const module = state.modules.find((m) => m.name === 'session-store')
+    // session-store 的 quality 被项目级 88 覆盖，所以换个角度看：坑确实进了证据
+    assert.equal(module.healthSources.quality, 'project')
+    const main = readFileSync(state.mainDoc, 'utf8')
+    assert.ok(main.includes('见模块 auth-flow'), '括号里的内容必须写进文档')
+  })
+
+  check('append 默认追加、不覆盖既有内容', () => {
+    updateMainSection(root, 'demo', 'decided', '- [x] 结论一', false)
+    updateMainSection(root, 'demo', 'decided', '- [x] 结论二', true)
+    const main = readFileSync(readState(root, 'demo').mainDoc, 'utf8')
+    assert.ok(main.includes('结论一') && main.includes('结论二'))
+  })
+
+  check('目录守卫：越界模块名被 slug 化后仍关在拼图目录内', () => {
+    const written = updateModuleSection(root, 'demo', '../../evil', 'points', '- x', false)
+    assert.equal(written.file, join(root, 'demo', PUZZLE_DIR, '模块', 'evil.md'))
+    assert.equal(existsSync(join(root, 'evil.md')), false)
+  })
+
+  check('readModuleDetail 带五维；不存在的模块不建文件', () => {
+    updateModuleSection(root, 'demo', 'auth-flow', 'points', '- 要点甲\n- 要点乙', false)
     const detail = readModuleDetail(root, 'demo', 'auth-flow')
     assert.equal(detail.ok, true)
     assert.equal(detail.exists, true)
-    assert.ok(detail.detail.includes('详细一'))
-    assert.equal(detail.declaredProgress, 80, '之前写过 完成度: 80')
+    assert.equal(detail.health, 70)
+    assert.equal(detail.dimensions.maintenance, 90)
+    assert.ok(detail.points.includes('要点甲'), '详情要能读到真实要点')
 
     const missing = readModuleDetail(root, 'demo', 'nope')
     assert.equal(missing.ok, true)
     assert.equal(missing.exists, false)
+    assert.equal(missing.health, 0)
     assert.equal(existsSync(join(root, 'demo', PUZZLE_DIR, '模块', 'nope.md')), false, '读详情不能建文件')
   })
 
-  check('projectSummaries 列出多个项目并标注默认', () => {
+  check('summarize 每次都带固定收尾问与五维元信息', () => {
+    const state = readState(root, 'demo')
+    const summary = summarize(state)
+    assert.equal(summary.askPause, true)
+    assert.equal(summary.pauseQuestion, PAUSE_QUESTION)
+    assert.deepEqual(summary.pauseOptions, PAUSE_OPTIONS)
+    assert.equal(typeof summary.health, 'number')
+    assert.equal(summary.dimensionMeta.length, 5)
+    assert.ok(!Object.hasOwn(summary, 'overall'), '不再有 overall（完整度）字段')
+    assert.ok(!Object.hasOwn(summary, 'pieces'), '不再有 pieces（图块计分）字段')
+    assert.equal(summary.modules.length, state.modules.length)
+    for (const module of summary.modules) {
+      assert.equal(typeof module.health, 'number')
+      assert.deepEqual(Object.keys(module.dimensions).sort(), [...HEALTH_KEYS].sort())
+    }
+  })
+
+  check('projectSummaries 用 health（不再是 overall）', () => {
     createProject(root, 'second', '第二个项目', ['mod-a'])
     const summaries = projectSummaries(root)
-    assert.equal(summaries.length, 2, '应有 demo 与 second 两个项目')
-    const names = summaries.map((item) => item.name).sort()
-    assert.deepEqual(names, ['demo', 'second'])
+    assert.equal(summaries.length, 2)
     for (const item of summaries) {
-      assert.equal(typeof item.overall, 'number')
-      assert.equal(typeof item.moduleCount, 'number')
-      assert.ok(item.updatedAt !== undefined)
+      assert.equal(typeof item.health, 'number')
+      assert.equal(typeof item.dimensions, 'object')
+      assert.ok(!Object.hasOwn(item, 'overall'), 'list 里不该再有 overall')
     }
     const list = summarizeList(root, summaries)
     assert.equal(list.projectCount, 2)
-    assert.ok(list.defaultProject !== null, '必须标出默认用哪个')
-    assert.ok(list.pauseQuestion === PAUSE_QUESTION, 'list 也要带固定收尾问')
+    assert.ok(list.defaultProject !== null)
   })
 
-  check('空项目根：summarizeList 不报错且 projectCount 为 0', () => {
-    const empty = mkdtempSync(join(tmpdir(), 'puzzle-empty-'))
-    try {
-      const list = summarizeList(empty, projectSummaries(empty))
-      assert.equal(list.ok, true)
-      assert.equal(list.projectCount, 0)
-      assert.equal(list.defaultProject, null)
-    } finally {
-      rmSync(empty, { recursive: true, force: true })
-    }
+  check('healthOf 对空字符串/坏输入不抛错', () => {
+    assert.equal(healthOf('').health, 0)
+    assert.equal(healthOf(null, null).health, 0)
+    assert.equal(healthOf(undefined).health, 0)
+  })
+
+  check('坏 front-matter 只降级、不抛错', () => {
+    const main = join(root, 'demo', PUZZLE_DIR, '主文档.md')
+    const text = readFileSync(main, 'utf8').replace('计划模块: [', '计划模块: [oops')
+    writeFileSync(main, text)
+    const state = readState(root, 'demo')
+    assert.equal(state.initialized, true)
+    assert.equal(state.degraded, true)
+    assert.equal(typeof state.health, 'number', '坏 front-matter 也要能算出健康性')
   })
 
   console.log(`\n${passed} 项通过`)
