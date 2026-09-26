@@ -50,7 +50,7 @@ function captureListener() {
     effect() {},
     get(name) {
       if (name !== 'sessions') return undefined
-      return { get(id) { return id === 'session-x' ? { header: { cwd: root } } : undefined } }
+      return { get(id) { return typeof id === 'string' && id !== '' ? { header: { cwd: root } } : undefined } }
     },
   })
   assert.equal(typeof listener, 'function', '必须注册 tools/pre-execute 监听器')
@@ -66,7 +66,7 @@ function call(name, id = 'session-x') {
 const allow = async () => ({ kind: 'allow' })
 
 try {
-  createProject(root, 'demo', '目标', ['auth-flow'])
+  createProject(root, 'demo', '目标', ['auth-flow'], '只拼不写', 'session-x')
   const listener = captureListener()
 
   // 1) 只拼不写：越权工具必须被 deny，且理由里带上固定收尾问与「改用 puzzle_mode」。
@@ -108,7 +108,9 @@ try {
 
   // 6) 无项目 / 未知会话：一律放行。
   const other = await listener(call('bash', 'session-unknown'), allow)
-  assert.equal(other.kind, 'allow', '拿不到会话时放行')
+  assert.equal(other.kind, 'allow', '该会话没绑定项目 → 放行（不误伤别的会话）')
+  const loose = await listener(call('bash', 'session-loose'), allow)
+  assert.equal(loose.kind, 'allow', '未绑定会话即使项目根下有项目也不拦')
   const emptyRoot = mkdtempSync(join(tmpdir(), 'puzzle-empty-'))
   try {
     const listener2 = (() => {

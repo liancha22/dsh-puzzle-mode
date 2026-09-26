@@ -21,14 +21,19 @@ import {
   PAUSE_OPTIONS,
   PAUSE_QUESTION,
   PUZZLE_DIR,
+  SESSION_FIELD,
   auditOf,
+  bindSession,
+  boundProject,
   createProject,
   defaultProjectName,
   dimensionRanking,
   healthLines,
   healthOf,
   isExecutableMode,
+  parseFrontMatter,
   parseHealthDeclarations,
+  parseSessionList,
   projectSummaries,
   readModuleDetail,
   readState,
@@ -435,6 +440,86 @@ try {
       assert.equal(typeof DIMENSION_FIX[key], 'string', `${key} 要有具体改法`)
       assert.ok(DIMENSION_FIX[key].length > 8, `${key} 的改法不能是空话`)
     }
+  })
+
+  check('会话绑定：init 自动绑定并写进 front-matter', () => {
+    const bindRoot = mkdtempSync(join(tmpdir(), 'puzzle-bind-'))
+    try {
+      const created = createProject(bindRoot, 'bound-demo', '绑定测试', ['m1'], MODE_PUZZLE_ONLY, 'sess-a')
+      assert.equal(created.ok, true)
+      assert.equal(created.bound, true, 'init 必须绑定本会话')
+      const main = readFileSync(join(bindRoot, 'bound-demo', PUZZLE_DIR, '主文档.md'), 'utf8')
+      assert.ok(main.includes(SESSION_FIELD + ': '), 'front-matter 必须有会话字段')
+      assert.deepEqual(parseSessionList(parseFrontMatter(main).fields), ['sess-a'])
+      assert.equal(boundProject(bindRoot, 'sess-a'), 'bound-demo')
+      assert.equal(boundProject(bindRoot, 'sess-b'), null, '别的会话不该命中')
+      assert.deepEqual(readState(bindRoot, 'bound-demo').sessions, ['sess-a'])
+    } finally {
+      rmSync(bindRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('会话绑定：不带会话 ID 就不写会话行', () => {
+    const plainRoot = mkdtempSync(join(tmpdir(), 'puzzle-nobind-'))
+    try {
+      const created = createProject(plainRoot, 'plain-demo', '无绑定', ['m1'])
+      assert.equal(created.bound, false)
+      const main = readFileSync(join(plainRoot, 'plain-demo', PUZZLE_DIR, '主文档.md'), 'utf8')
+      assert.ok(!main.includes(SESSION_FIELD + ':'), '没绑定时不该多出一行')
+      assert.deepEqual(readState(plainRoot, 'plain-demo').sessions, [])
+    } finally {
+      rmSync(plainRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('会话绑定：写小节之后绑定不丢（最容易漏的一处）', () => {
+    const keepRoot = mkdtempSync(join(tmpdir(), 'puzzle-keep-'))
+    try {
+      createProject(keepRoot, 'keep-demo', '写小节', ['m1'], MODE_PUZZLE_ONLY, 'sess-a')
+      const mainWrite = updateMainSection(keepRoot, 'keep-demo', 'pit', '- 一个坑')
+      assert.equal(mainWrite.ok, true)
+      assert.equal(boundProject(keepRoot, 'sess-a'), 'keep-demo', 'op:main 之后绑定必须还在')
+      const moduleWrite = updateModuleSection(keepRoot, 'keep-demo', 'm1', 'points', '- 一条要点')
+      assert.equal(moduleWrite.ok, true)
+      assert.equal(boundProject(keepRoot, 'sess-a'), 'keep-demo', 'op:module 之后绑定必须还在')
+      const modeWrite = setMode(keepRoot, 'keep-demo', MODE_PUZZLE_WRITE)
+      assert.equal(modeWrite.ok, true)
+      assert.equal(boundProject(keepRoot, 'sess-a'), 'keep-demo', 'op:mode 之后绑定必须还在')
+      assert.deepEqual(readState(keepRoot, 'keep-demo').sessions, ['sess-a'])
+    } finally {
+      rmSync(keepRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('会话绑定：一个会话只绑一个项目（绑新的就解绑旧的）', () => {
+    const oneRoot = mkdtempSync(join(tmpdir(), 'puzzle-one-'))
+    try {
+      createProject(oneRoot, 'first', '第一个', ['m1'], MODE_PUZZLE_ONLY, 'sess-a')
+      createProject(oneRoot, 'second', '第二个', ['m1'], MODE_PUZZLE_ONLY, 'sess-a')
+      assert.equal(boundProject(oneRoot, 'sess-a'), 'second', '同一会话只应留在最新绑定的项目上')
+      assert.deepEqual(readState(oneRoot, 'first').sessions, [], '旧项目上必须已解绑')
+      assert.deepEqual(readState(oneRoot, 'second').sessions, ['sess-a'])
+      const moved = bindSession(oneRoot, 'first', 'sess-b')
+      assert.equal(moved.ok, true)
+      assert.deepEqual(moved.released, [], 'sess-b 本来没绑，不该解绑任何东西')
+      assert.equal(boundProject(oneRoot, 'sess-a'), 'second')
+      assert.equal(boundProject(oneRoot, 'sess-b'), 'first')
+      const moved2 = bindSession(oneRoot, 'second', 'sess-b')
+      assert.equal(moved2.ok, true)
+      assert.deepEqual(moved2.released, ['first'], '改绑必须把旧项目摘掉')
+      assert.deepEqual(readState(oneRoot, 'first').sessions, [])
+      assert.deepEqual(readState(oneRoot, 'second').sessions, ['sess-a', 'sess-b'])
+    } finally {
+      rmSync(oneRoot, { recursive: true, force: true })
+    }
+  })
+
+  check('会话绑定：坏 front-matter 不抛错，当成没绑定', () => {
+    assert.deepEqual(parseSessionList({}), [])
+    assert.deepEqual(parseSessionList({ [SESSION_FIELD]: 'not json' }), [])
+    assert.deepEqual(parseSessionList({ [SESSION_FIELD]: '{"a":1}' }), [])
+    assert.deepEqual(parseSessionList({ [SESSION_FIELD]: '["a","a","", 3]' }), ['a'])
+    assert.deepEqual(parseSessionList(null), [])
   })
 
   console.log(`\n${passed} 项通过`)

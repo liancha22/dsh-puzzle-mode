@@ -42,7 +42,8 @@ function captureRoute({ reject = false } = {}) {
       if (name !== 'sessions') return undefined
       return {
         get(id) {
-          return id === 'session-x' ? { header: { cwd: root } } : undefined
+          // 任何会话 id 都指向同一个测试工作区：绑定测试需要多个会话。
+          return typeof id === 'string' && id !== '' ? { header: { cwd: root } } : undefined
         },
       }
     },
@@ -114,7 +115,7 @@ async function call(handler, options) {
 }
 
 try {
-  createProject(root, 'demo', '目标', ['auth-flow'])
+  createProject(root, 'demo', '目标', ['auth-flow'], '只拼不写', 'session-x')
 
   {
     const handler = captureRoute({ reject: true })
@@ -238,8 +239,9 @@ try {
     const handler = captureRoute()
     const out = await call(handler, { body: JSON.stringify({ method: 'state', sessionId: 'session-x' }) })
     assert.equal(out.body.result.cwdSource, 'session')
-    assert.equal(out.body.result.projectSource, 'latest')
-    ok('state → 暴露 cwdSource / projectSource')
+    assert.equal(out.body.result.projectSource, 'bound')
+    assert.equal(out.body.result.project, 'demo', '不给 project 时用的是本会话绑定的项目')
+    ok('state → 暴露 cwdSource / projectSource（绑定命中）')
   }
 
   {
@@ -298,6 +300,120 @@ try {
     assert.equal(out.ok, false)
     assert.ok(String(out.hint).includes('init'), '要指向 op:init')
     ok('op:audit 未初始化 → 明确失败并指向 init')
+  }
+
+  /** 截工具定义：get 对任何会话都返回同一个工作区，方便换会话测绑定。 */
+  function captureTool() {
+    let tool = null
+    host.apply({
+      systemPrompt: { section() {} },
+      tools: { register(definition) { tool = definition; return () => {} } },
+      on() { return () => {} },
+      effect() {},
+      get(name) {
+        if (name !== 'sessions') return undefined
+        return { get(id) { return typeof id === 'string' && id !== '' ? { header: { cwd: root } } : undefined } }
+      },
+      inject() {},
+    })
+    assert.equal(tool.name, 'puzzle_mode')
+    return tool
+  }
+
+  {
+    // 新会话默认空绑定：不猜项目、不占用别人的项目。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'state', sessionId: 'session-none' }) })
+    assert.equal(out.body.result.initialized, false)
+    assert.equal(out.body.result.projectSource, 'none')
+    assert.ok(String(out.body.result.hint).includes('op:init'), '要指向 op:init')
+    assert.equal(out.body.result.project, '', '不绑定时不该猜出任何项目名')
+    ok('state 未绑定 → 空（不猜项目）')
+  }
+
+  {
+    // 面板建项目：RPC create 要一次建出目录 + 主文档 + 模块文档，并绑定本会话。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'create', sessionId: 'session-ui', project: 'ui-created', goal: '面板建的', modules: ['m1'] }) })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.project, 'ui-created')
+    assert.equal(out.body.result.initialized, true)
+    assert.deepEqual(out.body.result.createdModules, ['m1'])
+    assert.deepEqual(readState(root, 'ui-created').sessions, ['session-ui'])
+    const after = await call(handler, { body: JSON.stringify({ method: 'state', sessionId: 'session-ui' }) })
+    assert.equal(after.body.result.project, 'ui-created')
+    assert.equal(after.body.result.projectSource, 'bound', '建完就该绑上')
+    ok('RPC create → 建项目 + 绑定本会话')
+  }
+
+  {
+    // 绑定已有项目：一个会话只绑一个，旧的自动解绑。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'bind', sessionId: 'session-none', project: 'ui-created' }) })
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.project, 'ui-created')
+    assert.equal(out.body.result.projectSource, 'bound')
+    assert.deepEqual(readState(root, 'ui-created').sessions, ['session-ui', 'session-none'])
+    const moved = await call(handler, { body: JSON.stringify({ method: 'bind', sessionId: 'session-none', project: 'demo' }) })
+    assert.equal(moved.body.ok, true)
+    assert.deepEqual(moved.body.result.released, ['ui-created'], '改绑要解绑旧项目')
+    assert.deepEqual(readState(root, 'ui-created').sessions, ['session-ui'])
+    ok('RPC bind → 改绑并解绑旧项目')
+  }
+
+  {
+    // 项目已被别的会话绑着时，改绑不能把别人的绑定也带走。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'bind', sessionId: 'session-rabbit', project: 'demo' }) })
+    assert.equal(out.body.ok, true)
+    // session-none 上一块刚改绑到 demo，所以这里它也在列表里：本轮只是再加一个会话，
+    // 谁都不该被挤掉——「一个会话只绑一个」约束的是会话侧，不是项目侧。
+    assert.deepEqual(readState(root, 'demo').sessions, ['session-x', 'session-none', 'session-rabbit'])
+    ok('RPC bind → 同一项目可被多个会话绑定')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'bind', sessionId: 'session-x' }) })
+    assert.equal(out.status, 400, '缺 project → 400')
+    ok('RPC bind 缺 project → 400')
+  }
+
+  {
+    // 没绑定就没有项目可写：写操作必须明确拒绝，而不是悄悄新建。
+    const tool = captureTool()
+    const out = await tool.execute({ op: 'main', section: 'pit', content: '- x' }, { agent: { session: { id: 'session-loose' } } })
+    assert.equal(out.ok, false)
+    assert.ok(String(out.hint).includes('op:init'), '要指向 op:init')
+    ok('op:main 未绑定 → 明确失败并指向 init')
+  }
+
+  {
+    // op:bind：本会话绑到已有项目，随后 read 必须命中它。
+    const tool = captureTool()
+    const exec = { agent: { session: { id: 'session-loose' } } }
+    const out = await tool.execute({ op: 'bind', project: 'demo' }, exec)
+    assert.equal(out.ok, true)
+    assert.equal(out.project, 'demo')
+    const after = await tool.execute({ op: 'read' }, exec)
+    assert.equal(after.initialized, true)
+    assert.equal(after.project, 'demo')
+    assert.equal(after.projectSource, 'bound')
+    ok('op:bind → 绑定后 read 命中该项目')
+  }
+
+  {
+    // op:init 自动绑定：并把自己从旧项目上摘掉（一个会话只绑一个）。
+    const tool = captureTool()
+    const out = await tool.execute({ op: 'init', project: 'tool-made', modules: ['m1'], goal: '工具建的' }, { agent: { session: { id: 'session-ui' } } })
+    assert.equal(out.ok, true)
+    assert.equal(out.project, 'tool-made')
+    assert.equal(out.bound, true)
+    assert.deepEqual(out.released, ['ui-created'], 'init 要把本会话从旧项目摘掉')
+    assert.deepEqual(readState(root, 'ui-created').sessions, [])
+    assert.deepEqual(readState(root, 'tool-made').sessions, ['session-ui'])
+    ok('op:init → 建项目并改绑本会话')
   }
 
   console.log(`\n${passed} 项通过`)

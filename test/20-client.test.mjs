@@ -103,6 +103,9 @@ const mod = loaded.factory((name) => {
 assert.equal(typeof mod.apply, 'function')
 assert.equal(typeof mod.questionTemplate, 'function', '提问模板必须可测（导出）')
 assert.equal(typeof mod.auditTemplate, 'function', '审查模板必须可测（导出）')
+for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate']) {
+  assert.equal(typeof mod[name], 'function', name + ' 必须可测（导出）')
+}
 
 /* ---------------------------- 提问模板内容 ---------------------------- */
 
@@ -123,6 +126,19 @@ assert.equal(typeof mod.auditTemplate, 'function', '审查模板必须可测（�
   assert.ok(audit.includes('五维'), '审查要按五维')
   assert.ok(audit.includes('要不要先停下？'), '审查模板同样必须含固定收尾问')
   assert.ok(audit.includes('停下，等我看过再说') && audit.includes('继续，不用停'))
+}
+
+{
+  const create = mod.createTemplate('登录重构')
+  assert.ok(create.includes('op:init'), '快速建空壳要点名 op:init')
+  assert.ok(create.includes('modules'), '要提示给出模块名')
+  assert.ok(create.includes('要不要先停下？'), '建项目模板同样带固定收尾问')
+  const interview = mod.interviewTemplate('登录重构')
+  assert.ok(interview.includes('op:init') && interview.includes('最多 5 问'), '采访模板要限 5 问')
+  assert.ok(interview.includes('不要提前调 op:init'), '采访模板要明确先别建')
+  const bind = mod.bindTemplate('demo')
+  assert.ok(bind.includes('op:bind'), '绑定模板要点名 op:bind')
+  assert.ok(bind.includes('demo'), '绑定模板要带上项目名')
 }
 
 /* ------------------------------ 注册契约 ------------------------------ */
@@ -271,3 +287,80 @@ assert.ok(!draftCalls[1].includes('op:audit'), '提问模板不该混入审查�
 assert.ok(!draftCalls.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提交')
 
 console.log('ok   bundle 格式、两个 Slot 注册、图块详情、客观发现渲染、提问/审查模板（setDraft，不自动发送）均通过')
+
+/* ------------- 空态：新会话默认空绑定 → 建项目 / 绑定已有项目 ------------- */
+
+// 第二次加载：让 state 返回 initialized:false，才能真正渲染空态分支。
+const emptyLoaded = []
+const emptyRequests = []
+const emptyWindow = {
+  __ModuleLoader__: { load(entry) { emptyLoaded.push(entry) } },
+  setInterval() { return 1 },
+  clearInterval() {},
+  addEventListener() {},
+  removeEventListener() {},
+}
+const emptyFetch = (url, options) => {
+  const body = JSON.parse(options.body)
+  emptyRequests.push(body)
+  let result
+  if (body.method === 'state') {
+    result = {
+      ok: true, initialized: false, projectRoot: '/tmp/ws2', projectDir: '', project: '',
+      mode: '只拼不写', modeSource: 'default', health: 0, dimensions: {}, sections: {},
+      cwdSource: 'session', projectSource: 'none', modules: [],
+    }
+  } else if (body.method === 'list') {
+    result = { ok: true, projectCount: 1, defaultProject: 'demo', projects: [{ name: 'demo', health: 62 }] }
+  } else {
+    result = { ok: true }
+  }
+  return Promise.resolve({ json: () => Promise.resolve({ ok: true, result }) })
+}
+new Function('window', 'document', 'fetch', source)(
+  emptyWindow,
+  { createElement: () => ({ setAttribute() {}, textContent: '' }), head: { appendChild() {} }, body: {} },
+  emptyFetch,
+)
+assert.equal(emptyLoaded.length, 1, '第二次加载也要注册 bundle')
+const emptyMod = emptyLoaded[0].factory((name) => {
+  if (name === 'react') return fakeReact
+  throw new Error('unexpected require: ' + name)
+})
+const emptyRegistered = []
+const emptySlots = {
+  inject(name, callback) { callback(); return () => {} },
+  register(options, component) { emptyRegistered.push({ options, component }); return () => {} },
+}
+emptyMod.apply({ get: (name) => (name === 'slots' ? emptySlots : undefined), effect: () => () => {} })
+const emptyButton = emptyRegistered.find((row) => row.options.name === 'conversation.input.left')
+const emptyPanel = emptyRegistered.find((row) => row.options.name === 'shell.overlay')
+const emptyDrafts = []
+const emptyActions = {
+  setDraft(text) { emptyDrafts.push(text) },
+  submit() { emptyDrafts.push('SUBMIT-SHOULD-NOT-HAPPEN') },
+}
+const emptyButtonTree = emptyButton.component({ sessionId: 'session-new', inputActions: emptyActions })
+emptyButtonTree.props.onClick()
+await flush()
+const emptyTree = emptyPanel.component({})
+assert.ok(emptyTree !== null, '空态也要渲染面板')
+assert.ok(findAll(emptyTree, (node) => typeof node === 'string' && node.includes('不会自动占用')).length >= 1, '空态要说清不会自动占用别人的项目')
+const emptyButtons = findAll(emptyTree, (node) => typeof node === 'object' && node.type === 'button' && node.props !== undefined && typeof node.props.onClick === 'function')
+const quickButton = emptyButtons.find((node) => Array.isArray(node.children) && node.children.some((child) => child === '快速建空壳'))
+const interviewButton = emptyButtons.find((node) => Array.isArray(node.children) && node.children.some((child) => child === '采访后再建'))
+assert.ok(quickButton !== undefined, '空态必须有「快速建空壳」')
+assert.ok(interviewButton !== undefined, '空态必须有「采访后再建」')
+quickButton.props.onClick()
+interviewButton.props.onClick()
+assert.equal(emptyDrafts.length, 2, '两个按钮各填一次模板')
+assert.ok(emptyDrafts[0].includes('op:init'), '快速建空壳填的是 op:init 模板')
+assert.ok(emptyDrafts[1].includes('最多 5 问'), '采访后再建填的是采访模板')
+assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提交')
+// 绑定已有项目：空态要列出现有项目并能一键绑定。
+const bindButton = findAll(emptyTree, (node) => typeof node === 'object' && node.type === 'button' && Array.isArray(node.children) && node.children.some((child) => child === '绑定'))[0]
+assert.ok(bindButton !== undefined, '空态要能绑定已有项目')
+bindButton.props.onClick()
+await flush()
+assert.ok(emptyRequests.some((item) => item.method === 'bind' && item.project === 'demo'), '点绑定要发 method:bind')
+console.log('ok   空态：快速建空壳 / 采访后再建 / 绑定已有项目（都走 setDraft 或 RPC，不自动提交）')
