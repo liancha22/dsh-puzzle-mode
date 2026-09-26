@@ -22,27 +22,42 @@
 
 | op | 作用 |
 | --- | --- |
+| `list` | 列出现有项目（名字 / 模式 / 完整度 / 模块数 / 更新时间）并标出默认用哪个 |
 | `read` | 读状态（不建文件）：项目、模式、模块、图块、总完整度 |
+| `show` | 读某个模块文档的详情（要点 / 相关决策 / 详细记录），不建文件 |
 | `init` | 新建项目：主文档 + N 份模块文档，一次建齐 |
 | `main` | 更新主文档六节之一：`index` / `pit` / `quote` / `pending` / `decided` / `revoked` |
 | `module` | 更新（必要时创建）模块文档：`progress` / `points` / `related` / `detail` |
 | `mode` | 切换执行模式 |
 
 每次返回都带 `askPause: true` 与固定收尾问的原文，确保模型不会漏问。
+每次返回还带 `projectSource`（`explicit` / `latest` / `default`）与 `cwdSource`：
+多项目工作区里「用的是哪个项目」、以及「项目根从哪来」都是可见的，不会静默选错。
 
 **3. 两种执行模式**
 
 | 模式 | 提问 | 文档 | 执行（bash / write / edit …） |
 | --- | --- | --- | --- |
-| 只拼不写 | 可以（每次带固定收尾问） | 可以 | **禁止**（由宿主 `agent/pre-step` 拦下越权工具） |
+| 只拼不写 | 可以（每次带固定收尾问） | 可以 | **禁止**（宿主 `tools/pre-execute` 返回 `deny`） |
 | 边拼边写 | 小改动问一次、大改动问一次 | 可以 | 允许 |
+
+拦截点是 `tools/pre-execute`（运行时官方钩子，`deny` 的理由会作为该次调用的错误回到模型）。
+**不用 `agent/pre-step`**：那个事件的 `decision.messages` 契约是 `UserMessage[]`，里面没有 tool-call，
+在它上面做拦截是永远不生效的死代码。
+
+`write` / `edit` 有意**不在**白名单里——它们能绕过 `puzzle_mode` 的 slug 过滤与路径守卫。
+文档写入一律走 `puzzle_mode`。
 
 **4. 拼图面板 UI**
 
 - `conversation.input.left`（模型选择器左边）小按钮：拼图图标 + 当前完整度百分比；
 - 点开 `shell.overlay` 弹出面板：项目路径、总完整度进度条、**图块网格**
-  （11 类：初始化 + 主文档六节 + 每个模块一块，未建的显示「未建」）；
-- 面板底部可直接切换两种模式（写回主文档 front-matter，与工具口径同一份数据）。
+  （初始化 + 主文档六节 + 每个模块一块，未建的显示「未建」）；
+- **图块可点开**：点模块块读该模块文档的要点 / 相关决策 / 详细记录；
+- **提问模板**：一键把「带固定收尾问」的提问填进输入框（`inputActions.setDraft`），
+  **不自动发送**——把「每次提问必带固定收尾问」从"靠模型自觉"变成"UI 直接给模板"；
+- 多项目时出现项目下拉；模式切换写回主文档 front-matter，与工具口径同一份数据；
+- 拿不到会话工作目录时（`cwdSource !== 'session'`）面板显式警告，不静默写错地方。
 
 ## 文档布局
 
@@ -119,12 +134,22 @@ ln -s ~/.dsh/plugin-src/dsh-puzzle-mode <profile>/node_modules/dsh-puzzle-mode
 
 ```bash
 npm test
-# 四组，都不需要 Cordis 运行时或浏览器（跑到最后一组时，按文件名顺序执行）：
-#   test/10-puzzle.test.mjs   目录守卫、多文档创建、小节合并、计分定值、固定收尾问
-#   test/20-client.test.mjs   浏览器 bundle 格式、两个 Slot 的注册契约、首渲染
-#   test/30-rpc.test.mjs      /puzzle-mode-rpc 的鉴权、参数与返回值
-#   test/40-pre-step.test.mjs 只拼不写拦截 / 边拼边写放行
+# 四组共 39 项，都不需要 Cordis 运行时或浏览器：
+#   test/10-puzzle.test.mjs       目录守卫、多文档创建、小节合并、计分定值、固定收尾问、
+#                                 list 摘要、模块详情、括号行不误判、modeSource
+#   test/20-client.test.mjs       bundle 格式、两个 Slot 注册、图块点开详情、
+#                                 提问模板走 setDraft 且不自动发送
+#   test/30-rpc.test.mjs          /puzzle-mode-rpc 的鉴权、参数与返回值（含 list/module）
+#   test/40-pre-execute.test.mjs  只拼不写 deny / 边拼边写放行（真实 ToolExecution 契约）
 ```
 
 最后一组要 import 宿主半，因此需要 `@deepseek-ai/dsh-tools` 能被解析——也就是插件已装进
 某个 DSH profile（运行时提供）。在没装 DSH 的裸目录里跑，这一组会明确输出跳过原因而不是报错。
+
+### 一个值得记住的教训
+
+拦截最初写在 `agent/pre-step` 上，并且测试是**绿的**——但那是假绿：
+`agent/pre-step` 的 `decision.messages` 契约是 `UserMessage[]`，里面根本没有 tool-call，
+所以真实运行时永远走不到那个分支，而测试自己伪造了一条带 tool-call 的 assistant 消息。
+换成 `tools/pre-execute`（真实契约：返回 `{kind:'deny',reason}`）后，断言才对得上真实行为。
+**写测试时要用权威契约的形状，不要用自己以为的形状。**

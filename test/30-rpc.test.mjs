@@ -171,6 +171,52 @@ try {
     ok('未知 method → 400')
   }
 
+  {
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'list', sessionId: 'session-x' }) })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.projectCount >= 1, true)
+    assert.ok(Array.isArray(out.body.result.projects))
+    ok('list → 返回项目清单与默认项目')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'module', sessionId: 'session-x', name: 'auth-flow' }) })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.exists, true)
+    assert.equal(typeof out.body.result.detail, 'string')
+    ok('module → 返回模块详情')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'module', sessionId: 'session-x' }) })
+    assert.equal(out.status, 400)
+    ok('module 缺 name → 400')
+  }
+
+  {
+    // 显式指定项目：不存在的项目名 → 状态应显示未初始化，而不是静默换成别的项目。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'state', sessionId: 'session-x', project: 'nope' }) })
+    assert.equal(out.body.result.initialized, false)
+    assert.equal(out.body.result.projectRequested, 'nope')
+    assert.equal(out.body.result.projectSource, 'explicit')
+    ok('state 带 project → 用显式项目（未初始化就如实说）')
+  }
+
+  {
+    // cwdSource 必须可见：拿不到会话时不能静默写到进程目录。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'state', sessionId: 'session-x' }) })
+    assert.equal(out.body.result.cwdSource, 'session')
+    assert.equal(out.body.result.projectSource, 'latest')
+    ok('state → 暴露 cwdSource / projectSource')
+  }
+
   console.log(`\n${passed} 项通过`)
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -19,10 +19,13 @@ import {
   PAUSE_OPTIONS,
   PAUSE_QUESTION,
   PUZZLE_DIR,
+  projectSummaries,
+  readModuleDetail,
   readState,
   setMode,
   slugify,
   summarize,
+  summarizeList,
   updateMainSection,
   updateModuleSection,
 } from '../lib/puzzle.js'
@@ -160,6 +163,81 @@ try {
     const state = readState(root, 'demo')
     assert.equal(state.initialized, true)
     assert.equal(state.degraded, true)
+  })
+
+  check('模块文档不带「模式」（模式是项目级，只在主文档）', () => {
+    const moduleText = readFileSync(join(root, 'demo', PUZZLE_DIR, '模块', 'auth-flow.md'), 'utf8')
+    assert.ok(!moduleText.includes('模式:'), '模块文档不该有 模式: 字段')
+    assert.ok(moduleText.includes('模块: auth-flow'), '模块文档应记自己的模块名')
+    const mainText = readFileSync(join(root, 'demo', PUZZLE_DIR, '主文档.md'), 'utf8')
+    assert.ok(mainText.includes('模式:'), '主文档仍应有 模式: 字段')
+  })
+
+  check('modeSource 区分「写死的」与「缺省补的」', () => {
+    const withMode = readState(root, 'demo')
+    assert.equal(withMode.modeSource, 'front-matter')
+    // 把模式行删掉 → 应退回默认值，且 modeSource 标记为 default
+    const dir = join(root, 'demo', PUZZLE_DIR)
+    const main = join(dir, '主文档.md')
+    const text = readFileSync(main, 'utf8').replace(/^模式: .*$/m, '')
+    writeFileSync(main, text)
+    const without = readState(root, 'demo')
+    assert.equal(without.mode, MODE_PUZZLE_ONLY)
+    assert.equal(without.modeSource, 'default')
+    // 恢复，后面的用例继续用「边拼边写」
+    setMode(root, 'demo', MODE_PUZZLE_WRITE)
+  })
+
+  check('用户写的括号行不再被误判为空', () => {
+    // 早先把「整行就是一对括号」一律当占位，于是真内容会被漏算。
+    updateMainSection(root, 'demo', 'pit', '- （见模块 auth-flow）', false)
+    const state = readState(root, 'demo')
+    const pit = state.pieces.find((piece) => piece.id === 'pit')
+    assert.equal(pit.counts.items, 1, '括号里的真内容应算 1 条')
+    assert.equal(pit.score, 25)
+  })
+
+  check('readModuleDetail 读详情；不存在的模块不建文件', () => {
+    updateModuleSection(root, 'demo', 'auth-flow', 'detail', '- 详细一\n- 详细二', false)
+    const detail = readModuleDetail(root, 'demo', 'auth-flow')
+    assert.equal(detail.ok, true)
+    assert.equal(detail.exists, true)
+    assert.ok(detail.detail.includes('详细一'))
+    assert.equal(detail.declaredProgress, 80, '之前写过 完成度: 80')
+
+    const missing = readModuleDetail(root, 'demo', 'nope')
+    assert.equal(missing.ok, true)
+    assert.equal(missing.exists, false)
+    assert.equal(existsSync(join(root, 'demo', PUZZLE_DIR, '模块', 'nope.md')), false, '读详情不能建文件')
+  })
+
+  check('projectSummaries 列出多个项目并标注默认', () => {
+    createProject(root, 'second', '第二个项目', ['mod-a'])
+    const summaries = projectSummaries(root)
+    assert.equal(summaries.length, 2, '应有 demo 与 second 两个项目')
+    const names = summaries.map((item) => item.name).sort()
+    assert.deepEqual(names, ['demo', 'second'])
+    for (const item of summaries) {
+      assert.equal(typeof item.overall, 'number')
+      assert.equal(typeof item.moduleCount, 'number')
+      assert.ok(item.updatedAt !== undefined)
+    }
+    const list = summarizeList(root, summaries)
+    assert.equal(list.projectCount, 2)
+    assert.ok(list.defaultProject !== null, '必须标出默认用哪个')
+    assert.ok(list.pauseQuestion === PAUSE_QUESTION, 'list 也要带固定收尾问')
+  })
+
+  check('空项目根：summarizeList 不报错且 projectCount 为 0', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'puzzle-empty-'))
+    try {
+      const list = summarizeList(empty, projectSummaries(empty))
+      assert.equal(list.ok, true)
+      assert.equal(list.projectCount, 0)
+      assert.equal(list.defaultProject, null)
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
   })
 
   console.log(`\n${passed} 项通过`)
