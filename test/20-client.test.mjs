@@ -103,7 +103,7 @@ const mod = loaded.factory((name) => {
 assert.equal(typeof mod.apply, 'function')
 assert.equal(typeof mod.questionTemplate, 'function', '提问模板必须可测（导出）')
 assert.equal(typeof mod.auditTemplate, 'function', '审查模板必须可测（导出）')
-for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate', 'createByForm', 'unbind']) {
+for (const name of ['createTemplate', 'interviewTemplate', 'bindTemplate', 'createByForm', 'unbind', 'rebuildNow']) {
   assert.equal(typeof mod[name], 'function', name + ' 必须可测（导出）')
 }
 

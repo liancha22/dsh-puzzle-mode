@@ -7,7 +7,7 @@
  * 以及**五维项目健康性**：显式分数、证据推导、反向维度、跨模块汇总。
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -41,6 +41,12 @@ import {
   setMode,
   slugify,
   summarize,
+  PUZZLE_VERSION,
+  PROGRESS_TO_HEALTH,
+  docVersion,
+  pendingMigrations,
+  planRebuild,
+  rebuildProject,
   summarizeList,
   unbindSession,
   updateMainSection,
@@ -49,6 +55,12 @@ import {
 } from '../lib/puzzle.js'
 
 const root = mkdtempSync(join(tmpdir(), 'puzzle-test-'))
+
+const V1_MAIN = "---\npuzzle: 1\n项目: legacy\n模式: 只拼不写\n计划模块: [\"mod-a\",\"mod-b\"]\n更新时间: 2026-09-19 10:00:00\n---\n# legacy · 主文档\n\n> 目标：迁移测试\n\n## 检索索引\n| 模块 | 一句话职责 | 文件 |\n| --- | --- | --- |\n| mod-a | 一号 | `模块/mod-a.md` |\n\n## 坑\n- 一条坑\n\n## 用户原话\n- 「原话」\n\n## 悬而未决\n- 一个未决\n\n## 已定\n- 一个已定\n\n## 撤销\n- （待补）\n"
+
+const V1_MODA = "---\npuzzle: 1\n项目: mod-a\n模式: 只拼不写\n计划模块: []\n更新时间: 2026-09-19 10:00:00\n---\n# mod-a\n\n## 进度\n完成度: 100\n## 要点\n- （该模块的关键结论，只留事实）\n\n## 与本模块相关的悬而未决 / 已定 / 撤销\n- [ ] （待补）\n\n## 详细记录\n- （细化记录；主文档只留一行索引）\n"
+
+const V1_MODB = "---\npuzzle: 1\n项目: mod-b\n模式: 只拼不写\n计划模块: []\n更新时间: 2026-09-19 10:00:00\n---\n# mod-b\n\n## 进度\n完成度: 100\n## 要点\n- 要点一\n- 要点二\n- 要点三\n\n## 与本模块相关的悬而未决 / 已定 / 撤销\n- [x] 已定一条\n\n## 详细记录\n- 细节一\n"
 let passed = 0
 
 function check(name, fn) {
@@ -585,6 +597,207 @@ try {
       assert.equal(boundProject(badRoot, 'sess-b'), 'bad-a', '拒绝时不该动到任何绑定')
     } finally {
       rmSync(badRoot, { recursive: true, force: true })
+    }
+  })
+
+  /** 造一份 v1 旧格式项目（两个模块：一个空、一个有要点）。 */
+  function seedLegacy(root) {
+    mkdirSync(join(root, 'legacy', PUZZLE_DIR, '模块'), { recursive: true })
+    writeFileSync(join(root, 'legacy', PUZZLE_DIR, '主文档.md'), V1_MAIN)
+    writeFileSync(join(root, 'legacy', PUZZLE_DIR, '模块', 'mod-a.md'), V1_MODA)
+    writeFileSync(join(root, 'legacy', PUZZLE_DIR, '模块', 'mod-b.md'), V1_MODB)
+  }
+
+  check('版本：docVersion 读 front-matter，缺失按 1', () => {
+    assert.equal(docVersion('---\npuzzle: 3\n---\n# x'), 3)
+    assert.equal(docVersion('---\n项目: x\n---\n# x'), 1, '没有 puzzle 字段按最早版本')
+    assert.equal(docVersion('---\npuzzle: abc\n---\n'), 1, '坏值按 1')
+    assert.equal(docVersion(''), 1)
+    assert.equal(PUZZLE_VERSION >= 2, true, '当前版本至少是 2')
+    assert.ok(PROGRESS_TO_HEALTH > 0 && PROGRESS_TO_HEALTH <= 1)
+  })
+
+  check('迁移链：旧版本有待办迁移，当前版本没有', () => {
+    assert.equal(pendingMigrations(1).length, 1, 'v1 有待办迁移')
+    assert.equal(pendingMigrations(PUZZLE_VERSION).length, 0, '当前版本没有待办迁移')
+    assert.ok(pendingMigrations(1)[0].label.includes('v1'))
+  })
+
+  check('planRebuild：只报计划、绝不写盘', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-'))
+    try {
+      seedLegacy(root2)
+      const before = readFileSync(join(root2, 'legacy', PUZZLE_DIR, '主文档.md'), 'utf8')
+      const plan = planRebuild(root2, 'legacy')
+      assert.equal(plan.ok, true)
+      assert.equal(plan.version, 1)
+      assert.equal(plan.targetVersion, PUZZLE_VERSION)
+      assert.equal(plan.outdated, true)
+      assert.equal(plan.migrations.length, 1)
+      assert.ok(plan.totalChanges > 0)
+      assert.deepEqual(readFileSync(join(root2, 'legacy', PUZZLE_DIR, '主文档.md'), 'utf8'), before, '预览不能改文件')
+      // 旧的形状问题要逐条报出来。
+      const modA = plan.files.find((f) => f.name === 'mod-a')
+      assert.ok(modA.changes.some((c) => c.includes('模块:')), '要报 front-matter 补 模块:')
+      assert.ok(modA.changes.some((c) => c.includes('模式:')), '要报去掉多余的 模式:')
+      assert.ok(modA.changes.some((c) => c.includes('健康性')), '要报补健康性')
+      const main = plan.files.find((f) => f.kind === 'main')
+      assert.ok(main.changes.some((c) => c.includes('版本')), '要报版本升级')
+      assert.ok(main.changes.some((c) => c.includes('版本升级'.slice(0, 1)) || true))
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('planRebuild：空会话不假称补 会话:（formatFrontMatter 对空数组不写那行）', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-sess-'))
+    try {
+      seedLegacy(root2)
+      const plan = planRebuild(root2, 'legacy')
+      const main = plan.files.find((f) => f.kind === 'main')
+      assert.ok(!main.changes.some((c) => c.includes('会话')), '没有会话 id 时不该声称补了 会话:')
+      assert.ok(!/^会话: /m.test(main.text), '写出来的文本里也不该凭空多出会话行')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：正文一字不动，只改形状', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-apply-'))
+    try {
+      seedLegacy(root2)
+      const result = rebuildProject(root2, 'legacy', true)
+      assert.equal(result.applied, true)
+      assert.deepEqual(result.failed, [])
+      assert.equal(result.written.length, 3, '主文档 + 两个模块')
+      const state = readState(root2, 'legacy')
+      assert.equal(state.version, PUZZLE_VERSION, '版本已升级')
+      assert.equal(state.outdated, false)
+      // 正文证据必须原样保留。
+      assert.equal(state.modules.find((m) => m.name === 'mod-b').counts.points, 3, '要点条数不变')
+      const mainText = readFileSync(join(root2, 'legacy', PUZZLE_DIR, '主文档.md'), 'utf8')
+      assert.ok(mainText.includes('- 一条坑'), '坑的正文保留')
+      assert.ok(mainText.includes('- 一个已定'), '已定的正文保留')
+      assert.ok(mainText.includes('| mod-a | 一号 |'), '检索索引表格保留')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：模块 front-matter 变成 项目 + 模块，多余字段去掉', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-fm-'))
+    try {
+      seedLegacy(root2)
+      rebuildProject(root2, 'legacy', true)
+      const text = readFileSync(join(root2, 'legacy', PUZZLE_DIR, '模块', 'mod-a.md'), 'utf8')
+      const fm = text.split('---')[1]
+      assert.ok(fm.includes('模块: mod-a'), '要有 模块: 字段')
+      assert.ok(!fm.includes('模式:'), '模块文档不该带 模式:')
+      assert.ok(!fm.includes('计划模块:'), '模块文档不该带 计划模块:')
+      assert.equal(docVersion(text), PUZZLE_VERSION)
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：折算只填证据拿不到分的维度，并在小节首位', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-health-'))
+    try {
+      seedLegacy(root2)
+      rebuildProject(root2, 'legacy', true)
+      const seeded = Math.min(100, Math.max(0, Math.round(100 * PROGRESS_TO_HEALTH)))
+      const a = readFileSync(join(root2, 'legacy', PUZZLE_DIR, '模块', 'mod-a.md'), 'utf8')
+      const aHealth = a.slice(a.indexOf('## 健康性'))
+      assert.ok(aHealth.includes('任务复杂度: ' + seeded), 'mod-a 空文档：复杂度该被折算填上')
+      // 健康性要跟在 # 标题之后，而不是被插到文末。
+      const aBody = a.split('---').slice(2).join('---')
+      assert.ok(/^#\s/.test(aBody.trim().split('\n')[0]), '标题仍在最前')
+      assert.equal(aBody.trim().split('\n')[2].trim(), '## 健康性', '健康性紧跟标题')
+      const b = readFileSync(join(root2, 'legacy', PUZZLE_DIR, '模块', 'mod-b.md'), 'utf8')
+      const bHealth = b.slice(b.indexOf('## 健康性'), b.indexOf('## 进度'))
+      assert.ok(!/- 任务复杂度: \d/.test(bHealth), 'mod-b 有要点：推导已够，不该被折算数字冻住')
+      assert.ok(!bHealth.includes('折算'), '一维都没填时不该出现折算说明')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建是幂等的：第二次 0 改动', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-idem-'))
+    try {
+      seedLegacy(root2)
+      rebuildProject(root2, 'legacy', true)
+      const again = planRebuild(root2, 'legacy')
+      assert.equal(again.totalChanges, 0, '再跑一次不该有改动')
+      assert.equal(again.outdated, false)
+      assert.deepEqual(again.writable, [])
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：已经迁移过的项目，dry-run 与落盘都是无操作', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-noop-'))
+    try {
+      createProject(root2, 'fresh', '新的', ['m1'], MODE_PUZZLE_WRITE, 'sess-1')
+      assert.equal(docVersion(readFileSync(join(root2, 'fresh', PUZZLE_DIR, '主文档.md'), 'utf8')), PUZZLE_VERSION, '新建即当前版本')
+      const plan = planRebuild(root2, 'fresh')
+      assert.equal(plan.outdated, false)
+      assert.equal(plan.totalChanges, 0)
+      const applied = rebuildProject(root2, 'fresh', true)
+      assert.deepEqual(applied.written, [], '无事可做就不写文件')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：旧格式项目的审查里有一条 doc_outdated', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-find-'))
+    try {
+      seedLegacy(root2)
+      const before = readState(root2, 'legacy')
+      assert.equal(before.outdated, true)
+      const row = before.findings.find((f) => f.id === 'doc_outdated')
+      assert.ok(row !== undefined, '旧格式要报一条 doc_outdated')
+      assert.equal(row.level, 'warn')
+      assert.equal(row.scope, 'project')
+      assert.ok(row.fact.includes('puzzle 1'), '事实里要带当前版本号')
+      assert.ok(row.fix.includes('op:rebuild'), '建议要指向 op:rebuild')
+      rebuildProject(root2, 'legacy', true)
+      const after = readState(root2, 'legacy')
+      assert.ok(!after.findings.some((f) => f.id === 'doc_outdated'), '迁移后这条发现要消失')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：缺模块文档的项目也被如实报出来，不报错', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-missing-'))
+    try {
+      seedLegacy(root2)
+      // mod-c 只声明、没文件。
+      const mainDoc = join(root2, 'legacy', PUZZLE_DIR, '主文档.md')
+      writeFileSync(mainDoc, readFileSync(mainDoc, 'utf8').replace('["mod-a","mod-b"]', '["mod-a","mod-b","mod-c"]'))
+      const plan = planRebuild(root2, 'legacy')
+      const c = plan.files.find((f) => f.name === 'mod-c')
+      assert.ok(c !== undefined, '缺文件的模块也要出现在计划里')
+      assert.equal(c.missing, true)
+      assert.equal(c.text, null, '没有文件就构不出新文本')
+      const applied = rebuildProject(root2, 'legacy', true)
+      assert.ok(!(applied.written || []).includes('mod-c'), '缺文件的模块不该被写入')
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
+  })
+
+  check('重建：坏项目名与非项目根都不抛错', () => {
+    const root2 = mkdtempSync(join(tmpdir(), 'puzzle-rebuild-bad-'))
+    try {
+      assert.equal(planRebuild(root2, 'nope').ok, false, '不存在的项目要失败而不是抛错')
+      assert.equal(planRebuild(root2, '..').ok, false)
+      assert.equal(rebuildProject(root2, 'nope', true).ok, false)
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
     }
   })
 

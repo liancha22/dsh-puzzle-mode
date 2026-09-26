@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { boundProject, createProject, readState } from '../lib/puzzle.js'
+import { PUZZLE_VERSION, boundProject, createProject, docVersion, readState } from '../lib/puzzle.js'
 
 let host
 try {
@@ -451,6 +451,58 @@ try {
     assert.deepEqual(out.body.result.createdModules, ['a', 'b'])
     assert.deepEqual(readState(root, 'form-made').sessions, ['session-form'])
     ok('RPC create 带多个模块 → 建齐并绑定')
+  }
+
+  {
+    // op:read 要带版本：模型据此决定要不要重建。
+    const tool = captureTool()
+    const out = await tool.execute({ op: 'read' }, { agent: { session: { id: 'session-x' } } })
+    assert.equal(out.version, PUZZLE_VERSION, 'read 要带当前文档版本')
+    assert.equal(out.outdated, false, '新建的项目不是旧格式')
+    ok('op:read → 带 version / outdated')
+  }
+
+  {
+    // op:rebuild 默认 dry-run：不显式给 apply 就只报计划。
+    const tool = captureTool()
+    const out = await tool.execute({ op: 'rebuild' }, { agent: { session: { id: 'session-x' } } })
+    assert.equal(out.ok, true)
+    assert.equal(out.applied, false, '默认必须是 dry-run')
+    assert.equal(out.targetVersion, PUZZLE_VERSION)
+    assert.ok(String(out.hint).includes('apply'), '要告诉调用方怎么落盘')
+    assert.ok(Array.isArray(out.files))
+    for (const item of out.files) assert.equal(typeof item.willWrite, 'boolean')
+    ok('op:rebuild 默认 dry-run → 只报计划 + 提示 apply:true')
+  }
+
+  {
+    // 真的落盘：apply:true。
+    const tool = captureTool()
+    const out = await tool.execute({ op: 'rebuild', apply: true }, { agent: { session: { id: 'session-x' } } })
+    assert.equal(out.ok, true)
+    assert.equal(out.applied, true)
+    assert.deepEqual(out.failed, [])
+    assert.equal(out.outdated, false, '落盘后不再是旧格式')
+    assert.equal(docVersion('---\npuzzle: 1\n---\n# x'), 1, '取证：docVersion 本身没问题')
+    ok('op:rebuild apply:true → 落盘且不再是旧格式')
+  }
+
+  {
+    // RPC rebuild：面板的按钮走这条。
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'rebuild', sessionId: 'session-x' }) })
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.applied, false, 'RPC 也默认 dry-run')
+    assert.equal(out.body.result.targetVersion, PUZZLE_VERSION)
+    assert.equal(typeof out.body.result.totalChanges, 'number')
+    ok('RPC rebuild → 默认 dry-run 返回计划')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, { body: JSON.stringify({ method: 'rebuild', sessionId: 'session-x', project: 'nope' }) })
+    assert.equal(out.body.ok, false, '不存在的项目要失败')
+    ok('RPC rebuild 不存在的项目 → ok:false')
   }
 
   console.log(`\n${passed} 项通过`)
