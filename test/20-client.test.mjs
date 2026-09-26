@@ -69,6 +69,10 @@ const fakeFetch = (url, options) => {
       cwdSource: 'session',
       projectSource: 'latest',
       modules: [{ name: 'auth-flow', exists: true, health: 62, dimensions: {}, counts: { points: 2, pending: 1, decided: 0 } }],
+      findings: [
+        { id: 'progress_no_points:auth-flow', level: 'blocker', dimension: 'maintenance', scope: 'auth-flow', fact: '完成度写 100，但要点 0 条。', fix: '把要点补上。' },
+        { id: 'weakest_dimension', level: 'info', dimension: 'reusability', scope: 'project', fact: '最弱一维是可复用性。', fix: '写出可复用接口。' },
+      ],
     }
   } else if (body.method === 'list') {
     result = { ok: true, projectCount: 2, defaultProject: 'demo', projects: [{ name: 'demo', health: 62 }, { name: 'second', health: 10 }] }
@@ -98,6 +102,7 @@ const mod = loaded.factory((name) => {
 })
 assert.equal(typeof mod.apply, 'function')
 assert.equal(typeof mod.questionTemplate, 'function', '提问模板必须可测（导出）')
+assert.equal(typeof mod.auditTemplate, 'function', '审查模板必须可测（导出）')
 
 /* ---------------------------- 提问模板内容 ---------------------------- */
 
@@ -106,6 +111,18 @@ assert.equal(typeof mod.questionTemplate, 'function', '提问模板必须可测�
   assert.ok(text.includes('登录重构'))
   assert.ok(text.includes('要不要先停下？'), '模板必须含固定收尾问')
   assert.ok(text.includes('停下，等我看过再说') && text.includes('继续，不用停'), '模板必须含两个固定选项')
+  // 提问数上限从 3 提到 5：模板要给出 5 个槽位。
+  for (const n of ['1. ', '2. ', '3. ', '4. ', '5. ']) assert.ok(text.includes(n), `模板要有第 ${n} 个提问槽`)
+  assert.ok(!text.includes('6. '), '不该有第 6 个槽位（上限 5）')
+}
+
+{
+  const audit = mod.auditTemplate('登录重构')
+  assert.ok(audit.includes('登录重构'))
+  assert.ok(audit.includes('op:audit'), '审查模板必须点名 op:audit')
+  assert.ok(audit.includes('五维'), '审查要按五维')
+  assert.ok(audit.includes('要不要先停下？'), '审查模板同样必须含固定收尾问')
+  assert.ok(audit.includes('停下，等我看过再说') && audit.includes('继续，不用停'))
 }
 
 /* ------------------------------ 注册契约 ------------------------------ */
@@ -202,6 +219,13 @@ function findAll(node, predicate, out = []) {
 const buttons = findAll(panelTree, (node) => typeof node === 'object' && node.type === 'button' && node.props !== undefined && typeof node.props.onClick === 'function')
 const templateButton = buttons.find((node) => Array.isArray(node.children) && node.children.some((child) => child === '提问模板'))
 assert.ok(templateButton !== undefined, '面板里必须有「提问模板」按钮')
+const auditButton = buttons.find((node) => Array.isArray(node.children) && node.children.some((child) => child === '审查'))
+assert.ok(auditButton !== undefined, '面板里必须有「审查」按钮')
+
+// 客观发现必须直接渲染出来（含事实与下一步），不能只躺在 RPC 里。
+assert.ok(findAll(panelTree, (node) => typeof node === 'string' && node.includes('完成度写 100')).length >= 1, '面板要显示发现的事实')
+assert.ok(findAll(panelTree, (node) => typeof node === 'string' && node.includes('把要点补上')).length >= 1, '面板要显示发现的下一步')
+assert.ok(findAll(panelTree, (node) => typeof node === 'string' && node.includes('审查 · 客观发现')).length >= 1, '要有审查区块标题')
 
 /* --------------------------- 图块可点开看详情 --------------------------- */
 
@@ -235,9 +259,15 @@ assert.equal(findAll(panelTree3, (node) => typeof node === 'string' && node.incl
 
 /* --------------------- 提问模板（放在最后：它会关面板） --------------------- */
 
+// 两个按钮各填各的模板：先点审查，再点提问模板。
+auditButton.props.onClick()
+assert.equal(draftCalls.length, 1, '点审查应恰好调用一次 setDraft')
+assert.ok(draftCalls[0].includes('op:audit'), '审查按钮要填审查模板')
+
 templateButton.props.onClick()
-assert.equal(draftCalls.length, 1, '点提问模板应恰好调用一次 setDraft')
-assert.ok(draftCalls[0].includes('要不要先停下？'), '填进输入框的模板必须含固定收尾问')
+assert.equal(draftCalls.length, 2, '点提问模板应再调用一次 setDraft')
+assert.ok(draftCalls[1].includes('要不要先停下？'), '填进输入框的模板必须含固定收尾问')
+assert.ok(!draftCalls[1].includes('op:audit'), '提问模板不该混入审查指令')
 assert.ok(!draftCalls.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提交')
 
-console.log('ok   bundle 格式、两个 Slot 注册、图块详情与提问模板（setDraft，不自动发送）均通过')
+console.log('ok   bundle 格式、两个 Slot 注册、图块详情、客观发现渲染、提问/审查模板（setDraft，不自动发送）均通过')

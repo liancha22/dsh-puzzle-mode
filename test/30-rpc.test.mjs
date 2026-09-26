@@ -158,7 +158,16 @@ try {
     assert.equal(out.body.result.dimensionMeta.length, 5, 'state 必须带五维元信息')
     assert.equal(typeof out.body.result.dimensions, 'object')
     assert.ok(out.body.result.modules.length >= 1)
-    ok('state → 返回项目健康性与五维')
+    // 面板要直接列出客观发现，所以 RPC 这一侧必须带完整 findings（op:read 只给数量）。
+    assert.ok(Array.isArray(out.body.result.findings), 'state 要带 findings 供面板渲染')
+    assert.ok(out.body.result.findings.length > 0, '空项目必须有发现')
+    assert.equal(out.body.result.ranking.length, 5, 'state 要带五维排序')
+    assert.equal(
+      out.body.result.findingCount,
+      out.body.result.findings.length,
+      'findingCount 要与 findings 一致',
+    )
+    ok('state → 返回项目健康性、五维与客观发现')
   }
 
   {
@@ -231,6 +240,64 @@ try {
     assert.equal(out.body.result.cwdSource, 'session')
     assert.equal(out.body.result.projectSource, 'latest')
     ok('state → 暴露 cwdSource / projectSource')
+  }
+
+  {
+    // op:audit 是工具不是 RPC，所以这里直接截工具定义并驱动 execute。
+    let tool = null
+    host.apply({
+      systemPrompt: { section() {} },
+      tools: { register(definition) { tool = definition; return () => {} } },
+      on() { return () => {} },
+      effect() {},
+      get(name) {
+        if (name !== 'sessions') return undefined
+        return { get(id) { return id === 'session-x' ? { header: { cwd: root } } : undefined } }
+      },
+      inject() {},
+    })
+    assert.equal(tool.name, 'puzzle_mode')
+    // defineTool 暴露的是 JSON Schema：枚举在 parameters.properties.op.enum。
+    assert.ok(tool.parameters.properties.op.enum.includes('audit'), 'op 枚举里必须有 audit')
+    const exec = { agent: { session: { id: 'session-x' } } }
+    const out = await tool.execute({ op: 'audit' }, exec)
+    assert.equal(out.ok, true)
+    assert.equal(out.project, 'demo')
+    assert.equal(typeof out.health, 'number')
+    assert.equal(out.dimensionMeta.length, 5)
+    assert.equal(out.ranking.length, 5, 'ranking 要覆盖五维')
+    assert.ok(Array.isArray(out.findings), 'findings 必须是数组')
+    assert.ok(out.findings.length > 0, '新建的空项目必须有发现')
+    assert.equal(typeof out.sections, 'object', '要带主文档六节的计数')
+    assert.equal(typeof out.prompt, 'string', '要带写点评的指令')
+    assert.ok(out.prompt.includes('最弱的一维'))
+    // 插件只给事实，不生成评价正文——正文由模型照着 prompt 写。
+    assert.ok(!Object.hasOwn(out, 'review'), '不该有插件生成的点评字段')
+    assert.ok(!Object.hasOwn(out, 'verdict'), '不该有插件生成的结论字段')
+    assert.equal(out.askPause, true, '审查返回同样带固定收尾问')
+    assert.equal(out.pauseQuestion, '要不要先停下？')
+    // 每个发现都必须能落到「事实 + 下一步」。
+    for (const item of out.findings) {
+      assert.ok(item.fact.length > 0 && item.fix.length > 0, `${item.id} 要成对给出事实与建议`)
+    }
+    ok('op:audit → 客观发现 + ranking + prompt（不含插件生成的评价）')
+  }
+
+  {
+    // 未初始化时审查要如实拒绝，而不是给一份空报告。
+    let tool = null
+    host.apply({
+      systemPrompt: { section() {} },
+      tools: { register(definition) { tool = definition; return () => {} } },
+      on() { return () => {} },
+      effect() {},
+      get(name) { return name === 'sessions' ? { get() { return { header: { cwd: root } } } } : undefined },
+      inject() {},
+    })
+    const out = await tool.execute({ op: 'audit', project: 'no-such-project' }, { agent: { session: { id: 'session-x' } } })
+    assert.equal(out.ok, false)
+    assert.ok(String(out.hint).includes('init'), '要指向 op:init')
+    ok('op:audit 未初始化 → 明确失败并指向 init')
   }
 
   console.log(`\n${passed} 项通过`)

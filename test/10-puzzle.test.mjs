@@ -11,6 +11,8 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  AUDIT_PROMPT,
+  DIMENSION_FIX,
   HEALTH_DIMENSIONS,
   HEALTH_HEADING,
   HEALTH_KEYS,
@@ -19,8 +21,10 @@ import {
   PAUSE_OPTIONS,
   PAUSE_QUESTION,
   PUZZLE_DIR,
+  auditOf,
   createProject,
   defaultProjectName,
+  dimensionRanking,
   healthLines,
   healthOf,
   isExecutableMode,
@@ -28,6 +32,7 @@ import {
   projectSummaries,
   readModuleDetail,
   readState,
+  sectionCounts,
   setMode,
   slugify,
   summarize,
@@ -275,6 +280,9 @@ try {
       assert.equal(typeof module.health, 'number')
       assert.deepEqual(Object.keys(module.dimensions).sort(), [...HEALTH_KEYS].sort())
     }
+    // op:read 要精简：只给发现的数量，不把整份 findings 塞进每轮都调的返回里。
+    assert.equal(typeof summary.findingCount, 'number')
+    assert.ok(!Object.hasOwn(summary, 'findings'), 'read 不塞完整 findings（走 op:audit）')
   })
 
   check('projectSummaries 用 health（不再是 overall）', () => {
@@ -305,6 +313,128 @@ try {
     assert.equal(state.initialized, true)
     assert.equal(state.degraded, true)
     assert.equal(typeof state.health, 'number', '坏 front-matter 也要能算出健康性')
+  })
+
+  check('sectionCounts 数主文档六节，且不吃模板占位', () => {
+    const text = readFileSync(readState(root, 'demo').mainDoc, 'utf8')
+    const counts = sectionCounts(text)
+    assert.deepEqual(Object.keys(counts), ['index', 'pit', 'quote', 'pending', 'decided', 'revoked'])
+    assert.ok(counts.pit >= 1, '「坑」里那条括号内容要算数')
+    assert.ok(counts.decided >= 2, '已定两条都在')
+  })
+
+  check('dimensionRanking 按分数升序，最弱的一维排最前', () => {
+    const ranking = dimensionRanking({ complexity: 50, extensibility: 10, maintenance: 90, quality: 0, reusability: 70 })
+    assert.equal(ranking.length, 5)
+    assert.equal(ranking[0].key, 'quality', '0 分排第一')
+    assert.equal(ranking[0].name, '代码质量', 'ranking 要带中文名')
+    assert.equal(ranking[4].key, 'maintenance', '90 分排最后')
+    for (let i = 1; i < ranking.length; i += 1) assert.ok(ranking[i - 1].value <= ranking[i].value, '必须升序')
+  })
+
+  check('主文档的悬而未决 / 已定也算进每个模块的可拓展性（与「坑」对称）', () => {
+    // 这个项目此前只数模块自己的勾选框，于是主文档写了 5 条已定、这一维仍是 0。
+    const isolated = createProject(root, 'audit-demo', '审查用', ['only-mod'])
+    assert.equal(isolated.ok, true)
+    const before = readState(root, 'audit-demo')
+    assert.equal(before.modules[0].healthScores.extensibility, 0, '主文档与模块都没写决策时是 0')
+
+    updateMainSection(root, 'audit-demo', 'decided', '- [x] 结论甲', false)
+    updateMainSection(root, 'audit-demo', 'pending', '- [ ] 待定乙', false)
+    const after = readState(root, 'audit-demo')
+    assert.equal(after.modules[0].healthSources.extensibility, 'derived')
+    // projectPending=1 + projectDecided=1 → (1+1)*20 = 40
+    assert.equal(after.modules[0].healthScores.extensibility, 40, '主文档 1 悬 + 1 定 → 40')
+  })
+
+  check('auditOf：完成度写满但要点为空 → blocker（这是装样子）', () => {
+    // 显式造场景：完成度 100，但要点仍是模板占位（0 条）。
+    updateModuleSection(root, 'audit-demo', 'only-mod', 'progress', '100', false)
+    const state = readState(root, 'audit-demo')
+    const item = state.findings.find((f) => f.id === 'progress_no_points:only-mod')
+    assert.ok(item !== undefined, '完成度满、要点 0 条 → 必须报出来')
+    assert.equal(item.level, 'blocker')
+    assert.ok(item.fact.includes('完成度'), '事实里必须点名完成度')
+    assert.ok(item.fact.includes('100'), '事实里要带那个完成度数字')
+    assert.ok(item.fix.length > 0, '每条发现都要有下一步')
+    assert.equal(item.scope, 'only-mod', '要指明落在哪个模块')
+
+    // 反例：要点补上之后，这条发现必须消失（否则就是噪音）。
+    updateModuleSection(root, 'audit-demo', 'only-mod', 'points', '- 一条真要点', false)
+    const after = readState(root, 'audit-demo')
+    assert.ok(
+      !after.findings.some((f) => f.id === 'progress_no_points:only-mod'),
+      '要点补上后不该再报',
+    )
+  })
+
+  check('auditOf：每条发现的 fix 都能在 DIMENSION_FIX 或事实里落地', () => {
+    const state = readState(root, 'demo')
+    for (const item of state.findings) {
+      assert.ok(['blocker', 'warn', 'info'].includes(item.level), `${item.id} 的 level 必须是三档之一`)
+      assert.equal(typeof item.fact, 'string')
+      assert.equal(typeof item.fix, 'string')
+      assert.ok(item.fact.length > 0 && item.fix.length > 0, `${item.id} 事实与建议都不能空`)
+    }
+  })
+
+  check('auditOf：手写分数没有对应证据 → warn', () => {
+    // session-store 的 quality 被项目级 88 覆盖，而它自己的「已定」已写、坑来自主文档，
+    // 所以换一个干净的模块专门验这条。
+    updateModuleSection(root, 'audit-demo', 'only-mod', 'health', '- 代码质量: 95', false)
+    const state = readState(root, 'audit-demo')
+    const item = state.findings.find((f) => f.id === 'declared_without_evidence:only-mod:quality')
+    assert.ok(item !== undefined, '手写 95 但一条坑都没有 → 必须报出来')
+    assert.equal(item.level, 'warn')
+    assert.ok(item.fact.includes('95'), '事实里要带那个自封的分数')
+  })
+
+  check('auditOf：全模块都靠公式推 → 只报一条项目级，不刷屏', () => {
+    // 三个模块都有内容（所以 health > 0，不算「空模块」），但都没手写分数。
+    createProject(root, 'audit-plain', '未评估的项目', ['mod-a', 'mod-b', 'mod-c'])
+    for (const name of ['mod-a', 'mod-b', 'mod-c']) {
+      updateModuleSection(root, 'audit-plain', name, 'points', '- 一条要点', false)
+    }
+    const state = readState(root, 'audit-plain')
+    assert.equal(state.modules.length, 3)
+    for (const module of state.modules) assert.ok(module.health > 0, '有要点就该有分')
+    const rows = state.findings.filter((f) => f.id === 'never_reviewed')
+    assert.equal(rows.length, 1, '三个模块也只报一条')
+    assert.equal(rows[0].scope, 'project', '全都没评估时按项目级报')
+    assert.ok(rows[0].fact.includes('3 个模块'), '事实里要带数量')
+    assert.ok(rows[0].fact.includes('mod-a') && rows[0].fact.includes('mod-c'), '事实里要点名是哪些模块')
+
+    // 只要有一个模块被人工评估过，就不再是「全都没评估」，这条降级为点名那几个。
+    updateModuleSection(root, 'audit-plain', 'mod-a', 'health', '- 代码质量: 70', false)
+    const mixed = readState(root, 'audit-plain')
+    const rows2 = mixed.findings.filter((f) => f.id === 'never_reviewed')
+    assert.equal(rows2.length, 1, '仍然只报一条')
+    assert.equal(rows2[0].scope, 'mod-b、mod-c', '只点名还没评估的那些')
+    assert.ok(!rows2[0].fact.includes('mod-a'), '评估过的模块不该再被点名')
+  })
+
+  check('auditOf：空项目与坏输入都不抛错，且给出可执行建议', () => {
+    const empty = auditOf({ modules: [], sections: {}, dimensions: {} })
+    assert.ok(empty.some((f) => f.id === 'no_modules' && f.level === 'blocker'))
+    assert.ok(empty.some((f) => f.id === 'pit_empty'))
+    for (const bad of [null, undefined, {}, { modules: null, sections: null }]) {
+      const out = auditOf(bad)
+      assert.ok(Array.isArray(out), '坏输入也要返回数组')
+      assert.ok(out.length > 0, '空项目至少给一条 blocker')
+    }
+  })
+
+  check('AUDIT_PROMPT 要求点名、带数字、给下一步', () => {
+    assert.ok(AUDIT_PROMPT.includes('最弱的一维'))
+    assert.ok(AUDIT_PROMPT.includes('可执行的下一步'))
+    assert.ok(AUDIT_PROMPT.includes('空话'), '要明确禁止空话')
+  })
+
+  check('DIMENSION_FIX 五维齐备', () => {
+    for (const key of HEALTH_KEYS) {
+      assert.equal(typeof DIMENSION_FIX[key], 'string', `${key} 要有具体改法`)
+      assert.ok(DIMENSION_FIX[key].length > 8, `${key} 的改法不能是空话`)
+    }
   })
 
   console.log(`\n${passed} 项通过`)
