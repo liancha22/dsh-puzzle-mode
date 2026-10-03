@@ -31,6 +31,9 @@ import {
   SECTION_HEADINGS,
   SECTION_ORDER,
   SIZE_LARGE,
+  SIZE_MEDIUM,
+  capsOfSize,
+  limitsOfSize,
   MODULE_SECTION_HEADINGS,
   SESSION_FIELD,
   auditOf,
@@ -932,6 +935,89 @@ try {
       }
       // 而且必须**真的还写着那一行**，不是靠默认值蒙对。
       assert.match(read(), /^规模: 大$/m, 'front-matter 里必须真的还有 `规模: 大`')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /* ---------------- 审查器必须按规模档位取上限（v0.24.2 真 bug） ---------------- */
+
+  /**
+   * 用户原话：「审查器没有同步规模改动」。
+   *
+   * 三处写死了**中档**值：`audit.js` 的条数上限用 `ENTRY_CAPS`（4/10）、
+   * `project.js` 的条目字数用 `MAIN_ENTRY_SPEC` / `MODULE_ENTRY_SPEC`（源自中档 `ENTRY_LIMITS`）。
+   * 而写入侧走的是 `capsOfSize` / `limitsOfSize`——于是**大档项目写进去合法、审查却报警**。
+   * 这正是本仓记过的「两把尺子」。
+   *
+   * 这条断言从**两个方向**钉住它：大档合法条目不许被报，中档超限条目仍须被报
+   * （只测前者的话，把上限全改成 `Infinity` 也能绿）。
+   */
+  check('审查按规模档位取上限：大档不误报，中档仍会报', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'puzzle-size-audit-'))
+    try {
+      createProject(dir, 'big', '目标', ['m1'], MODE_PUZZLE_WRITE, 'sess-big')
+      setSize(dir, 'big', '大', 'sess-big')
+      const bigLimits = limitsOfSize(SIZE_LARGE)
+      const bigCaps = capsOfSize(SIZE_LARGE)
+      // 大档比中档宽——不成立的话这条断言本身没意义。
+      assert.ok(bigLimits.points > ENTRY_LIMITS.points,
+        `大档要点上限应大于中档（${bigLimits.points} > ${ENTRY_LIMITS.points}）`)
+      assert.ok(bigCaps.decided > ENTRY_CAPS.decided,
+        `大档已定上限应大于中档（${bigCaps.decided} > ${ENTRY_CAPS.decided}）`)
+
+      // 写一条**中档超长、大档合法**的要点：长度取两档之间。
+      const target = ENTRY_LIMITS.points + 5
+      const text = '要'.repeat(target)
+      assert.ok(target <= bigLimits.points, '构造的要点长度须在大档上限内')
+      const wrote = updateModuleSection(dir, 'big', 'm1', 'points',
+        `- ${text}（源码: lib/a.js:1）`, false)
+      assert.notEqual(wrote && wrote.ok, false, `大档写 ${target} 字要点应成功：${wrote && wrote.error}`)
+
+      // 写**中档超条数、大档合法**的已定条数。
+      const n = ENTRY_CAPS.decided + 2
+      assert.ok(n <= bigCaps.decided, '构造的条数须在大档上限内')
+      const lines = Array.from({ length: n }, (_, i) => `- 已定条目${i + 1}（源码: lib/a.js:${i + 1}）`).join('\n')
+      updateModuleSection(dir, 'big', 'm1', 'decided', lines, false)
+
+      const state = readState(dir, 'big', 'sess-big')
+      assert.equal(state.size, SIZE_LARGE, '读回的档位应是大')
+      const mod = state.modules[0]
+      assert.equal((mod.entryIssues ?? []).length, 0,
+        `大档的 ${target} 字要点不该被报超长——审查必须按档位量（当前报了 ${JSON.stringify(mod.entryIssues)}）`)
+
+      const findings = auditOf(state)
+      const overCap = findings.filter((f) => f.id.startsWith('over_cap'))
+      const entryIssue = findings.filter((f) => f.id.startsWith('entry_issue'))
+      assert.equal(overCap.length, 0,
+        `大档的 ${n} 条已定不该被报超上限（当前报了 ${overCap.map((f) => f.fact).join('；')}）`)
+      assert.equal(entryIssue.length, 0,
+        `大档的条目不该被报超长（当前报了 ${entryIssue.map((f) => f.fact).join('；')}）`)
+
+      // 反向：中档项目**已有**超长条目时必须被报出来——否则「大档不报」可能是因为
+      // 审查根本没在量（把上限改成 Infinity 也能绿）。
+      //
+      // ⚠️ 不能用 `updateModuleSection` 造这条数据：写入侧会**直接拒绝**超长条目
+      // （`条目 25 字，超过上限 20 字`），根本不落盘。超长条目只可能来自**旧文档**
+      // （迁移不追溯），所以这里直接写文件——这正是审查存在的理由。
+      const dir2 = mkdtempSync(join(tmpdir(), 'puzzle-size-audit2-'))
+      try {
+        createProject(dir2, 'mid', '目标', ['m1'], MODE_PUZZLE_WRITE, 'sess-mid')
+        // 不调 setSize：缺省即中档。
+        const modFile = join(dir2, 'mid', PUZZLE_DIR, '模块', 'm1.md')
+        const text = readFileSync(modFile, 'utf8')
+        const long = '要'.repeat(ENTRY_LIMITS.points + 5)
+        assert.ok(text.includes('## 要点'), '模块文档应有「## 要点」小节可替换')
+        writeFileSync(modFile, text.replace(/## 要点\n[\s\S]*?(?=\n## )/,
+          `## 要点\n- ${long}（源码: lib/a.js:1）\n`))
+        const midState = readState(dir2, 'mid', 'sess-mid')
+        assert.equal(midState.size, SIZE_MEDIUM, '缺省档位应是中')
+        const midIssues = midState.modules[0].entryIssues ?? []
+        assert.ok(midIssues.some((issue) => issue.tooLong > 0),
+          `中档项目里已有的超长要点**必须**被报出来（当前 entryIssues=${JSON.stringify(midIssues)}）`)
+      } finally {
+        rmSync(dir2, { recursive: true, force: true })
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
