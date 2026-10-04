@@ -15,10 +15,62 @@
 | 测试 | **v3 起旧自检已过期**（断言钉死 v2 形状）；按工作约定不维护、不追红。验收判据见各版本 Release 正文的「验收判据」一节 |
 | 依赖 | 无。只 peer 依赖 `@deepseek-ai/dsh-tools`（运行时提供） |
 
+## 0.5 市场收录（两个市场，规矩完全不同）
+
+生态里有**两个**都叫 dsh-market 的市场，别混——收录路径不一样：
+
+| 市场 | 入口 | 收录方式 | 我们的状态 |
+| --- | --- | --- | --- |
+| **dsh-market/dsh-market**（官方） | DSH 里 Settings → **Plugin Market** | **不往它仓库提 PR**（README 原话：*This repo is the market app, not the catalog*）。目录数据在 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)，**往那里提一个 yml 文件的 PR** | 见下 |
+| **2BingLing/dsh-market** | <https://dsh.market> | **每日 03:00 UTC 自动扫 `dsh-plugin` topic**，无需提交 | **已自动收录**（描述由管道生成，会滞后若干天） |
+
+### 往 awesome-dsh-plugin 提收录（官方市场的数据源）
+
+**一个文件就是全部投稿**：`data/plugins/<owner>__<repo>.yml`。
+
+```yaml
+url: https://github.com/liancha22/dsh-puzzle-mode
+name: liancha22/dsh-puzzle-mode
+category: memory
+tarball: https://github.com/liancha22/dsh-puzzle-mode/releases/download/vX.Y.Z/dsh-puzzle-mode-X.Y.Z.tgz
+description:
+  en: '一句话，句号结尾。含 `: ` 必须加引号，否则 YAML 解析失败。'
+  zh: '中文可选，维护者会补。'
+```
+
+要点（都是 `contributing.md` 里的硬规矩，踩过就懂）：
+
+- **别手工改两个 README** —— 它们由 `data/plugins/*.yml` 生成。CI 的判据是「PR 有没有碰 README」：
+  没碰就重新生成后 `exit 0`（**通过**）；碰了就必须与生成结果逐字一致。**所以只加 yml、不碰 README 最稳。**
+- **`description` 会被拿代码核对**。写数字/API 名就得真有——夸大是打回的头号原因。
+  所以描述里只写能对着源码数出来的事实（五维是哪五个、格式 v几、档位有哪几档）。
+- 仓库要有 `dsh.bundle`（**只声明 `dsh.client` 不算可安装**，这是最常见的被拒原因）、真实代码、
+  满 1 天、活跃维护，并打上 `dsh-plugin` topic。
+- 分类选最接近的即可，**不会因分类被打回**（维护者直接改）。我们选 `memory`：
+  核心是「跨会话带着项目决策走 + 每条带出处」，与 `00080000/dsh-project-memory` 同架。
+
+**提 PR 前先本地预跑 CI 的那把尺子**（省一轮来回）：
+
+```bash
+git clone git@github.com:<你>/awesome-dsh-plugin.git && cd awesome-dsh-plugin
+npm ci
+cp <你的>.yml data/plugins/<owner>__<repo>.yml
+git add -A && git commit -m "Add <owner>/<repo> to the list"
+GITHUB_TOKEN=<token> node scripts/check-submission.mjs --base HEAD~1
+# 期望：checking 1 entry / ok <url> / all checked entries pass
+```
+
+⚠️ **`--base` 必须给**：不给的话它会把**全部 4400+ 条**当成「本 PR 新增」，
+报「This pull request adds 4413 entries; the limit is 3」——那是假警报，不是你的问题。
+
+- 提交记录：PR [#6546](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6546)（2026-10-04）。
+- 收录后：市场与站点通常在一天内自动拾取，**不需要再动本仓**。
+- 以后**更新自己的条目**：只改 `data/plugins/<owner>__<repo>.yml` 这一个文件，
+  别去改别人的行（README 生成制就是为了避免行号漂移改错邻居）。
+
 ## 1. 别人怎么装（GitHub 源，推荐）
 
 **前提：仓库必须 public** —— 下载器不带鉴权（匿名请求 `api.github.com`），私有仓库在别人机器上拉不到。
-
 ```bash
 # 1) 插件管理器（App 插件页「添加插件」用的就是它；支持标签/分支/子目录）
 python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode
