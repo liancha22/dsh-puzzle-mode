@@ -113,6 +113,91 @@ git tag -f vX.Y.Z && git push origin HEAD --tags
 bash tools/release.sh vX.Y.Z          # 建 Release（**内置测试门禁**，正文取 .github/release-vX.Y.Z.md）
 ```
 
+### ⚠️ 这台机器上的实测推送路径（v0.26.0 走过一遍）
+
+`release.sh` 与 `git push origin` 都假设**能直连 github**。本机实测的链路是：
+
+| 路径 | 结果 |
+| --- | --- |
+| 直连 `github.com` | **通，1～2 秒**（前提：`.gitconfig` 里没有 `insteadOf` 劫持，见下） |
+| `gh-proxy.com` 转发 push | **丢认证头** —— 报 `remote: No anonymous write access` |
+| `ghproxy.net` 转发 push | **通**，认证头能转过去（`receive-pack` 返 200 而非 401） |
+| `ghfast.top` | 坏 —— git 报 `SEC_E_CERT_EXPIRED`，耗十几秒才失败 |
+
+能跑通的三条命令：
+
+```bash
+# 1) 凭据放**请求头**，别塞进 URL：gh-proxy 系镜像会把带凭据的 URL 拼坏（404）
+HDR="Authorization: Basic $(printf 'x-access-token:%s' "$(cat ~/.dsh/.github-token)" | base64 -w0)"
+# 2) **逐个提交推**：一次性推含大图的提交会被代理掐断成 HTTP 408
+#    （RPC failed; HTTP 408 / send-pack: unexpected disconnect）
+git -c http.extraHeader="$HDR" -c http.postBuffer=524288000 -c http.version=HTTP/1.1 \
+    push "$URL" 5002363:refs/heads/main
+# 3) tag 单独推
+git -c http.extraHeader="$HDR" push "$URL" refs/tags/vX.Y.Z --force
+```
+
+- **`--force-with-lease` 会假失败**：本地没 fetch 过远端时它报 `stale info`。
+  先 `git fetch "$URL" main` 再推，或确认是快进就直接推。
+- **建 Release 用 API**（`release.sh` 依赖 bash + `jq`，Windows 上没有）：
+
+  ```bash
+  curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data @rel.json https://api.github.com/repos/liancha22/dsh-puzzle-mode/releases
+  ```
+- **传附件直连 `uploads.github.com` 就行**（不要走镜像，实测镜像反而报
+  `end of response with 14 bytes missing`）：
+
+  ```bash
+  curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/gzip" \
+    --data-binary @dsh-puzzle-mode-X.Y.Z.tgz \
+    "https://uploads.github.com/repos/liancha22/dsh-puzzle-mode/releases/<id>/assets?name=dsh-puzzle-mode-X.Y.Z.tgz"
+  ```
+  **重传前先删旧附件**，否则会多一个 `-1` 后缀。
+- 验证别只看 API：**匿名**下载一次附件（`curl -L` 不带 token，期望 200）才算真能装。
+
+### 🩸 故障：市场点「更新」必失败，且回滚把插件删了
+
+v0.26.0 发完后用户点市场更新，三次全失败，日志是
+`dsh: connection to github.com timed out after 5000ms`，最后一次变成
+**"restoration of the previous build could not be verified"**（这句会让人以为 profile 坏了）。
+
+**根因不在网络，在 `~/.gitconfig` 里一条历史遗留的 `insteadOf`：**
+
+```ini
+[url "https://ghfast.top/https://github.com/liancha22/dsh-puzzle-mode"]
+    insteadOf = https://github.com/liancha22/dsh-puzzle-mode
+```
+
+它把**所有**对这个仓库的访问劫持到 `ghfast.top`，而 git 走它报证书过期 ——
+先耗十几秒再失败，**看起来和「直连超时」一模一样，把人和市场都骗了**。
+而市场中国区的 git 路由是 `[null, gh-proxy.com, ghfast.top]`（**第一步就是直连**），
+被劫持后必然失败。**删掉那两条 `insteadOf` 之后直连立刻正常（1.7 秒拿到 HEAD）。**
+
+**回滚造成的真实损伤**（这才是要修的东西）：市场更新失败且回滚无法验证时，
+会把 `dsh-puzzle-mode` 从 **`dependencies` 和 `dsh.profile.bundles` 里同时删掉**，
+并删除 `node_modules/dsh-puzzle-mode`。于是：
+
+- 插件**静默消失**（bundles 没有它 → 不加载）；
+- 即使手动把目录放回去，**bundles 缺这一行也不会加载**；
+- `package.json` 与 `pnpm-lock.yaml` 里都没有它，看起来像「从没装过」。
+
+修复顺序（照这个来，别跳步）：
+
+```bash
+cd ~/.dsh/profiles/desktop
+# 1) 依赖写回标准 git 写法（不要用 file: 本地 tgz —— 市场靠这个 specifier 接管更新）
+#    "dsh-puzzle-mode": "git+https://github.com/liancha22/dsh-puzzle-mode.git"
+# 2) **bundles 里补回 "dsh-puzzle-mode"**（漏了就不加载，这是最容易漏的一步）
+# 3) 重新装（会真的联网 clone）
+pnpm install
+# 4) 三方对齐才算好：lockfile 的 codeload URL 里的 sha == 本地 HEAD == 远端 HEAD
+```
+
+> 顺带澄清一个**假故障**：`@deepblend/dsh-blender-bundle` 不在 `bundles` 里是**正常的** ——
+> 市场 `.dsh-market/state.json` 里 `disabled` 明确列了它，不是坏了。
+
+
 ### ⚠️ 测试约定：**本项目已放开**（v0.19.8，用户裁定）
 
 全局约定（`~/.dsh/AGENTS.md`）是「不写测试、不跑测试」，理由是**断言钉死中间写法**、
