@@ -197,6 +197,50 @@ pnpm install
 > 顺带澄清一个**假故障**：`@deepblend/dsh-blender-bundle` 不在 `bundles` 里是**正常的** ——
 > 市场 `.dsh-market/state.json` 里 `disabled` 明确列了它，不是坏了。
 
+#### 🩸 手动升版本时的坑：pnpm 有**三处**锁文件，只改一处它就说「Already up to date」
+
+v0.27.0 实测（`github:` 源装在 profile 里，非符号链接）：
+
+| 位置 | 内容 |
+| --- | --- |
+| `pnpm-lock.yaml`（profile 根） | 权威锁文件，`github:` 依赖在这里被解析成 **codeload tar.gz + sha** |
+| `node_modules/.pnpm/lock.yaml` | pnpm 自己的副本，**它会先看这份** |
+| `node_modules/.modules.yaml` | `hoistedLocations` 里记着**旧 sha 的 key**，匹配上就跳过 |
+
+只改第一处 → `pnpm install --frozen-lockfile` 打印 **`Already up to date`**（退出码 0），
+**插件却还是旧版**。三处都改成新 sha 之后仍可能被 `--force` 无视，因为
+`.modules.yaml` 的 hoisted key 命中了旧条目。
+
+**另一个坑**：`pnpm update dsh-puzzle-mode` 会走 `git+ssh`（`git ls-remote git+ssh://git@github.com/...`），
+本机**没有 SSH key** → `Host key verification failed`。所以手动升级时**别用 `pnpm update`**，
+改锁文件 + `install` 才走得通（codeload 是 HTTPS，可达）。
+
+**手动升级的正确顺序**（v0.27.0 走过）：
+
+```bash
+# 1) 拉新 commit 的 tarball 并**验内容**（版本号 + 关键改动都在，别只信 sha）
+curl -sSL -o /tmp/new.tar.gz \
+  https://codeload.github.com/liancha22/dsh-puzzle-mode/tar.gz/<新sha>
+tar -xzf /tmp/new.tar.gz -C /tmp && grep '"version"' /tmp/dsh-puzzle-mode-<新sha>/package.json
+# 2) 算 integrity（sha512，与 lockfile 里同算法）：
+#    openssl dgst -sha512 -binary /tmp/new.tar.gz | base64 -w0
+#    ⚠️ 先拿**旧 sha** 的 tarball 复算一遍，确认算出的值与 lockfile 里的旧 integrity 一致 ——
+#       这一步能证明算法没错，否则新 integrity 写错会以「integrity 校验失败」的形式炸掉
+# 3) 三处锁文件同步改：pnpm-lock.yaml、node_modules/.pnpm/lock.yaml、
+#    node_modules/.modules.yaml（hoistedLocations 的 key）+ integrity + version
+# 4) pnpm install --frozen-lockfile
+```
+
+**若 pnpm 死活不重装**：安装副本就是 `npm pack` 的 48 文件形状
+（**没有 `.github/`**，因为 pnpm 对 git-hosted 依赖走 packlist）。所以可以
+`tar -xzf dsh-puzzle-mode-X.Y.Z.tgz` 后**逐文件覆盖** `node_modules/dsh-puzzle-mode/`——
+但**先 `Compare-Object` 两边文件清单**，确认完全一致再覆盖（v0.27.0 实测两边都是 48 个文件、清单相同）。
+
+**验收**：三方 sha 对齐（本地 HEAD == 远端 main == lockfile 里的 sha），
+且**真 import 一次纯逻辑半**验行为（`lib/index.js` 在 profile 里 import 会因
+`@deepseek-ai/dsh-tools` 由运行时提供而报 ERR_MODULE_NOT_FOUND，**这是正常的**；
+`lib/puzzle.js` 才是能单独 import 的那半）。
+
 
 ### ⚠️ 测试约定：**本项目已放开**（v0.19.8，用户裁定）
 
