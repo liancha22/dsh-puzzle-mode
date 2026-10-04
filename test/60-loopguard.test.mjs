@@ -27,6 +27,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  LOOP_ESCALATE_EVERY,
+  LOOP_MAX_LEVEL,
   LOOP_REPEAT_THRESHOLD,
   actionSignature,
   clearStreak,
@@ -140,16 +142,43 @@ try {
   assert.equal(hit.shouldFire, true, '连续到阈值 → 熔断')
   ok(`连续 ${LOOP_REPEAT_THRESHOLD} 次同签名 → 触发熔断`)
 
-  // 同一段连击只报一次：报过之后第 4、5 次不该各报一条（比不报更烦）。
+  // 升级重报（v0.27.0）：报过之后**不再永久闭嘴**。
+  // 旧行为是「同一段连击只报一次」，实测后果是熔断不生效——模型没改的时候，
+  // 后面每一次重复都被静默放行，链条原地空转或把球踢回用户，最后还得人工推。
   const again = noteAction('s1', 'read', { path: '/a' })
-  assert.equal(again.shouldFire, false, '同一段连击只报一次')
-  assert.equal(again.count, LOOP_REPEAT_THRESHOLD + 1, '计数继续涨但不再报')
-  ok('同一段连击只报一次')
+  assert.equal(again.shouldFire, false, '报过之后紧邻的几次不重复刷屏（间隔内）')
+  assert.equal(again.count, LOOP_REPEAT_THRESHOLD + 1, '计数继续涨')
+  ok('报过一次后，间隔内不重复刷屏')
 
-  // 签名变了 = 换了动作 → 重新数，并重新武装。
+  // 关键回归：没换动作 → 每 LOOP_ESCALATE_EVERY 次必须**再报一次**。
+  // 这条断言就是「熔断后能自己继续推进」的守卫；把它删掉，功能会静默退化成只报一次。
+  let escalated = null
+  let steps = LOOP_REPEAT_THRESHOLD + 1
+  while (steps < LOOP_REPEAT_THRESHOLD + LOOP_ESCALATE_EVERY + 2) {
+    const next = noteAction('s1', 'read', { path: '/a' })
+    steps += 1
+    if (next.shouldFire) { escalated = next; break }
+  }
+  assert.notEqual(escalated, null, `没换动作时，每 ${LOOP_ESCALATE_EVERY} 次必须再报一次（否则熔断只报一次 = 静默失效）`)
+  assert.equal(escalated.level, 2, '第二次提醒 level 升到 2（文案要变硬）')
+  ok(`没换动作 → 每 ${LOOP_ESCALATE_EVERY} 次升级重报一次`)
+
+  // level 有上限：连击再长也不无限加码，但**仍然继续重报**（沉默比重复更贵）。
+  let maxLevel = escalated.level
+  let refires = 0
+  for (let i = 0; i < LOOP_ESCALATE_EVERY * LOOP_MAX_LEVEL + LOOP_ESCALATE_EVERY; i += 1) {
+    const next = noteAction('s1', 'read', { path: '/a' })
+    if (next.shouldFire) { refires += 1; maxLevel = Math.max(maxLevel, next.level) }
+  }
+  assert.equal(maxLevel, LOOP_MAX_LEVEL, `level 到顶后不再加码（上限 ${LOOP_MAX_LEVEL}）`)
+  assert.ok(refires >= 1, '到顶之后仍然按间隔重报——不许退回「报过就永久沉默」')
+  ok(`level 封顶 ${LOOP_MAX_LEVEL}，且到顶后仍持续重报`)
+
+  // 签名变了 = 换了动作 → 重新数，并重新武装（提醒次数归零，重新给温和的第一档）。
   const changed = noteAction('s1', 'read', { path: '/b' })
   assert.equal(changed.count, 1, '换动作后从 1 重新数')
   assert.equal(changed.shouldFire, false, '换动作后不立刻报')
+  assert.equal(changed.level, 0, '换动作后提醒档位归零')
   ok('换动作后连击归零并重新武装')
 
   // 不同会话互不干扰（本 hook 注册在根级 ctx，对每个 agent 都生效）。
@@ -176,6 +205,16 @@ try {
   // 三条出路缺一不可：只说「别重复」等于没给信息。
   assert.ok(text.includes('换输入') && text.includes('换动作') && text.includes('停下来说清'), '三条出路齐全')
   ok('熔断提示含事实 + 三条出路')
+
+  // 第二档起必须**撤掉「转人工」这条逃逸口**——它是最省力的逃避，
+  // 留着它熔断就变成「把问题抛回用户」，正是用户报的那个「还得人工推」。
+  const hard = loopBreakText('read', LOOP_REPEAT_THRESHOLD + LOOP_ESCALATE_EVERY, LOOP_REPEAT_THRESHOLD, 2)
+  assert.ok(hard.includes('先捋事实'), '第二档要给「先捋已有事实」这一步')
+  assert.ok(hard.includes('不要再调一次工具去确认'), '第二档要禁掉「再确认一遍」')
+  assert.ok(hard.includes('现在不适用'), '第二档必须明确否掉「停下来说清」这条出路')
+  assert.ok(hard.includes('卡在哪一步'), '真要报卡住时必须说清卡在哪一步、缺哪条信息')
+  assert.ok(!hard.includes('三选一'), '第二档不再是三选一')
+  ok('第二档升级为硬指令并撤掉转人工逃逸口')
 
   /* ---------------- 接线层：真钩子驱动 ---------------- */
 
@@ -204,6 +243,23 @@ try {
   assert.ok(breakText.includes('read_file'), '注入文本点名了重复的工具')
   assert.ok(breakText.includes(String(LOOP_REPEAT_THRESHOLD)), '注入文本写明了重复次数')
   ok('接线：注入文本内容正确')
+
+  // 接线层回归（v0.27.0 的核心）：模型**不改**的时候，钩子必须持续推动，
+  // 而且第二次注入要换成硬指令。只验纯函数会漏掉「钩子没把 level 传下去」这种断线。
+  resetLoopGuard()
+  clearStreak(sessionId)
+  const pushed = []
+  for (let i = 0; i < LOOP_REPEAT_THRESHOLD + LOOP_ESCALATE_EVERY + 2; i += 1) {
+    const decision = await breakListener(call('read_file', execArgs, sessionId), { ok: true }, accept)
+    const contexts = decision !== null && Array.isArray(decision.additionalContexts) ? decision.additionalContexts : []
+    for (const message of contexts) {
+      const content = message !== null && message !== undefined ? message.content : undefined
+      if (Array.isArray(content)) pushed.push(content.map((b) => (b !== null && typeof b.text === 'string' ? b.text : '')).join(''))
+    }
+  }
+  assert.ok(pushed.length >= 2, '不改动作时钩子必须重复注入（只注入一次 = 熔断后没人推，用户得手工接着跑）')
+  assert.ok(pushed.some((one) => one.includes('先捋事实')), '第二次注入必须是硬指令（撤掉转人工逃逸口）')
+  ok('接线：不改动作时持续升级注入，第二次起是硬指令')
 
   // 守卫自证：不重复的调用**不许**被注入（否则熔断会变成噪音源）。
   resetLoopGuard()
