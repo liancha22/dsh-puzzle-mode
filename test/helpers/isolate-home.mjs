@@ -20,6 +20,3 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'puzzle-home-'))
-
-/** 这个临时 DSH_HOME 的路径（测试想往里写设置文件时用）。 */
-export const TEST_DSH_HOME = process.env.DSH_HOME
