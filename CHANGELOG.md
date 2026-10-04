@@ -1,3 +1,29 @@
+### v0.26.1 · 修 op:audit 带源码体检必失败
+
+**症状**：`puzzle_mode{op:'audit'}` 只要带源码体检（也就是它的主用法），一律报
+`tool "puzzle_mode" returned invalid output: value is not lossless JSON`；
+只有显式 `source:false` 能跑。文档与代码都没问题，纯粹是**返回体的形状**踩了宿主的校验。
+
+**根因**：宿主对工具返回做「无损 JSON」校验——必须能
+`JSON.parse(JSON.stringify(x))` **原样往返**，而**显式 `undefined`** 过不了这一关
+（`{file: undefined}` → stringify → `{}` → 不等于原值）。`lib/index.js` 把源码发现
+并进 `findings` 时无条件写了 `file: item.file`，而 `source_flat`（「N 个文件全在同一层目录」）
+与「另有 N 个函数超长」这两条是**项目级**发现、本来就没有单个文件。
+
+**修法**：字段**要么是字符串、要么根本不存在**——
+`...(typeof item.file === 'string' && item.file !== '' ? { file: item.file } : {})`。
+带 file 的发现照旧带 file，项目级的那两条不再带。
+
+**新增回归测试** `test/90-audit-tool.test.mjs`（5 项）。它不钉某个具体字段，而是断言
+**整个返回**能无损往返——这条判据不管以后哪个字段被写成 `undefined` 都会红。
+为了让 `source_flat` 真的出现，测试会造出「7 个源码文件、只有一层目录」的形状。
+
+> 诊断过程记一笔：`inspectSource` 与 `auditOf` **单独跑都可序列化**，所以问题只能在
+> 「组装工具返回」那一段——**只有真调一次工具才覆盖得到**。
+> 这也是为什么加的是工具级测试，而不是给 `lib/source.js` 加单测。
+
+`npm test` 全绿：60 + 47 + 7 + 51 + 13 + 36 + 12 + 5；跨插件握手 18 / 0。
+
 ### v0.26.0 · 固定收尾问可全局关闭
 
 用户原话：「提问到最后还要选继续还是停下？的功能加一个全局关闭功能。」

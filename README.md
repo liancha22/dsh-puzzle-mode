@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v0.26.0** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v0.26.1** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.26.0
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.26.1
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-0.26.0.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.25.0/dsh-puzzle-mode-0.26.0.tgz)
+[dsh-puzzle-mode-0.26.1.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.26.1/dsh-puzzle-mode-0.26.1.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -57,6 +57,29 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ---
 
 ## 最新版本
+
+### v0.26.1 · 修 op:audit 带源码体检必失败
+
+`puzzle_mode{op:'audit'}` 只要带源码体检（`source` 默认就是 `true`，也就是它的主用法），
+一律报 `tool "puzzle_mode" returned invalid output: value is not lossless JSON`；
+只有显式 `source:false` 能跑——而那等于放弃了源码体检。
+
+**根因**：宿主对工具返回做「无损 JSON」校验，要求能
+`JSON.parse(JSON.stringify(x))` **原样往返**，而**显式 `undefined`** 过不了这一关
+（`{file: undefined}` → stringify → `{}` → 不等于原值）。`lib/index.js` 把源码发现
+并进 `findings` 时无条件写了 `file: item.file`，而 `source_flat`（「N 个文件全在同一层目录」）
+与「另有 N 个函数超长」这两条是**项目级**发现、本来就没有单个文件。
+
+**修法**：字段**要么是字符串、要么根本不存在**。带 `file` 的发现照旧带，项目级的不再带。
+
+新增 `test/90-audit-tool.test.mjs`（5 项）：它不钉某个具体字段，而是断言**整个返回**
+能无损往返——不管以后哪个字段被写成 `undefined` 都会红。
+
+> 诊断过程值得记：`inspectSource` 与 `auditOf` **单独跑都是可序列化的**，
+> 所以问题只能在「组装工具返回」那一段，而那一段**只有真调一次工具才覆盖得到**。
+> 这就是为什么加的是**工具级**测试——给 `lib/source.js` 补单测会全绿，而真机照旧报错。
+
+`npm test` 全绿：60 + 47 + 7 + 51 + 13 + 36 + 12 + 5；跨插件握手 18 / 0。
 
 ### v0.26.0 · 固定收尾问可全局关闭
 
