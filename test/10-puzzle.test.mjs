@@ -7,6 +7,8 @@
  * 以及**五维项目健康性**：显式分数、证据推导、反向维度、跨模块汇总。
  */
 import assert from 'node:assert/strict'
+// **必须最先**：把 DSH_HOME 指到临时目录（收尾问开关是全局设置，见该文件注释）。
+import './helpers/isolate-home.mjs'
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

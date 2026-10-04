@@ -8,6 +8,8 @@
  * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
  */
 import assert from 'node:assert/strict'
+// **必须最先**：把 DSH_HOME 指到临时目录（收尾问开关是全局设置，见该文件注释）。
+import './helpers/isolate-home.mjs'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

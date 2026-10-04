@@ -45,6 +45,13 @@ import {
   PANEL_LIMITS,
   PAUSE_OPTIONS,
   PAUSE_QUESTION,
+  isAskPauseEnabled,
+  setAskPause,
+  pauseFields,
+  readSettings,
+  settingsPath,
+  disableSession,
+  enableSession,
   PUZZLE_DIR,
   PUZZLE_VERSION,
   SECTION_HEADINGS,
@@ -568,6 +575,72 @@ try {
     assert.equal(typeof PAUSE_QUESTION, 'string')
     assert.ok(PAUSE_QUESTION.length > 0)
     for (const option of PAUSE_OPTIONS) assert.ok(typeof option === 'string' && option.length > 0)
+  })
+
+  /**
+   * v0.26.0：固定收尾问有了**全局关闭**开关（用户原话：「提问到最后还要选继续还是停下？
+   * 的功能加一个全局关闭功能」）。
+   *
+   * 这条契约钉的是**默认值语义**：缺字段必须是「开」。
+   * 反过来（缺=关）会让所有老用户的提问静默变了行为——比功能本身严重得多。
+   * 同时钉住「关掉后不再下发文案」：留着 `pauseQuestion` 比不带更糟，
+   * 模型看到文案就会继续问，于是「关掉了」变成一句空话。
+   */
+  check('契约·固定收尾问的全局开关：默认开，且关掉后不再下发文案', () => {
+    const prev = process.env.DSH_HOME
+    const home = mkdtempSync(join(tmpdir(), 'puzzle-contract-pause-'))
+    process.env.DSH_HOME = home
+    try {
+      // 没有设置文件 = 开（默认行为不变）。
+      assert.equal(isAskPauseEnabled(), true, '缺设置文件时必须是「开」')
+      const on = pauseFields()
+      assert.equal(on.askPause, true)
+      assert.equal(on.pauseQuestion, PAUSE_QUESTION)
+      assert.deepEqual(on.pauseOptions, PAUSE_OPTIONS)
+
+      // 显式关掉之后：false + **不带**文案与选项。
+      setAskPause(false)
+      assert.equal(isAskPauseEnabled(), false)
+      const off = pauseFields()
+      assert.equal(off.askPause, false)
+      assert.equal(Object.hasOwn(off, 'pauseQuestion'), false, '关掉后不该再下发收尾问文案')
+      assert.equal(Object.hasOwn(off, 'pauseOptions'), false, '关掉后不该再下发收尾问选项')
+
+      // 缺字段（老用户的设置文件）仍然算「开」。
+      writeFileSync(settingsPath(), JSON.stringify({ disabledSessions: [] }))
+      assert.equal(isAskPauseEnabled(), true, '缺 askPause 字段必须当「开」')
+    } finally {
+      if (prev === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prev
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * 两个开关共用一个设置文件（`disabledSessions` + `askPause`），
+   * 任何一侧写入时漏带另一侧就会把对方抹掉——本仓记过的「同名不同形的字段会互相盖掉」。
+   */
+  check('契约·收尾问开关与按会话禁用互不覆盖', () => {
+    const prev = process.env.DSH_HOME
+    const home = mkdtempSync(join(tmpdir(), 'puzzle-contract-pause2-'))
+    process.env.DSH_HOME = home
+    try {
+      disableSession('sess-x')
+      disableSession('sess-y')
+      setAskPause(false)
+      let after = readSettings()
+      assert.equal(after.askPause, false)
+      assert.deepEqual(after.disabledSessions, ['sess-x', 'sess-y'], '写 askPause 不能抹掉禁用名单')
+
+      enableSession('sess-x')
+      after = readSettings()
+      assert.equal(after.askPause, false, '写禁用名单不能重置 askPause')
+      assert.deepEqual(after.disabledSessions, ['sess-y'])
+    } finally {
+      if (prev === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prev
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 
   /**
