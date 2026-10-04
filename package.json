@@ -31,7 +31,8 @@
     "verify:themes": "node tools/verify-themes.mjs",
     "verify:theme-install": "node tools/verify-theme-install.mjs",
     "fetch:test-deps": "node tools/fetch-test-deps.mjs --all",
-    "render-tutorial": "node tools/render-tutorial.mjs"
+    "render-tutorial": "node tools/render-tutorial.mjs",
+    "verify:themes-online": "node tools/verify-themes-online.mjs"
   },
   "keywords": [
     "dsh",
