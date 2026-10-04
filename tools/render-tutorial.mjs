@@ -18,7 +18,7 @@
  * 依赖：`marked`（转 HTML）+ playwright 的 chromium（截图）。
  * 两者都**不在插件运行时依赖里**——这是构建期工具，不进 `files`。
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
@@ -158,6 +158,10 @@ function safeName(raw) {
 async function loadChromium() {
   const candidates = [
     'playwright',
+    // `playwright-core` 不带浏览器，但能驱动**系统已装**的 Chromium（见 `launchBrowser`）。
+    // 本机实测：npm 上 playwright 那个包体积大、镜像也慢，而系统本来就有 Edge——
+    // 为了出一张图去下一个 130MB 的浏览器是纯浪费。
+    'playwright-core',
     '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/playwright/index.js',
   ]
   for (const spec of candidates) {
@@ -170,8 +174,35 @@ async function loadChromium() {
     }
   }
   throw new Error(
-    '找不到 playwright。装一个再重跑：npm i -D playwright && npx playwright install chromium',
+    '找不到 playwright。装一个再重跑：npm i -D playwright-core（本机有 Edge/Chrome 就够了，不必下浏览器）',
   )
+}
+
+/**
+ * 启动浏览器：先试 playwright 自带的 chromium，失败再试**系统已装**的 Edge / Chrome。
+ *
+ * 为什么要有第二档：`playwright-core` 不自带浏览器，直接 `launch()` 会报
+ * 「Executable doesn't exist」。而 Windows 上 Edge 是系统自带的 Chromium，
+ * 用 `channel: 'msedge'` 就能驱动它——出图这件事不需要指定版本。
+ * 两条都失败才抛出原始错误，并把两个原因都带上（只报后一个会把真因藏掉）。
+ */
+async function launchBrowser(chromium) {
+  const args = ['--no-sandbox', '--font-render-hinting=none']
+  try {
+    return await chromium.launch({ args })
+  } catch (first) {
+    for (const channel of ['msedge', 'chrome']) {
+      try {
+        return await chromium.launch({ channel, args })
+      } catch (_error) {
+        /* 换下一个 channel */
+      }
+    }
+    throw new Error(
+      '启动浏览器失败。自带 chromium：' + String(first && first.message ? first.message : first).split('\n')[0]
+      + '；系统 Edge/Chrome 也起不来。装浏览器用：npx playwright install chromium',
+    )
+  }
 }
 
 /**
@@ -199,14 +230,24 @@ for p in sys.argv[1:]:
 print(f'{total0//1024}KB -> {total1//1024}KB')
 `
   const { spawnSync } = await import('node:child_process')
-  const res = spawnSync('python3', ['-c', script, ...files.map((f) => join(dir, f))], {
-    encoding: 'utf8',
-  })
-  if (res.status !== 0) {
-    console.warn('（量化跳过，图仍可用）：', (res.stderr ?? '').trim().split('\n').pop())
-    return
+  // 找 python：`python3` 是 POSIX 惯例，Windows 上通常只有 `python`；
+  // 另外 DSH 自带一份带 Pillow 的运行时（`$DSH_PYTHON` 可覆盖）。
+  // 不找就直接跳过量化——那会让图从 1.7MB 涨到 6.5MB，所以值得多试几次。
+  const candidates = [
+    process.env.DSH_PYTHON,
+    'python3',
+    'python',
+  ].filter((x) => typeof x === 'string' && x !== '')
+  let lastError = '没找到 python'
+  for (const bin of candidates) {
+    const res = spawnSync(bin, ['-c', script, ...files.map((f) => join(dir, f))], { encoding: 'utf8' })
+    if (res.status === 0) {
+      console.log(`✓ 量化 256 色：${res.stdout.trim()}`)
+      return
+    }
+    lastError = (res.stderr ?? '').trim().split('\n').pop() || String(res.error?.message ?? '')
   }
-  console.log(`✓ 量化 256 色：${res.stdout.trim()}`)
+  console.warn('（量化跳过，图仍可用）：', lastError)
 }
 
 async function main() {
@@ -217,10 +258,23 @@ async function main() {
   const preamble = sections[0]?.title === null ? sections.shift() : null
 
   const chromium = await loadChromium()
-  const browser = await chromium.launch({ args: ['--no-sandbox', '--font-render-hinting=none'] })
+  const browser = await launchBrowser(chromium)
 
   mkdirSync(OUT_DIR, { recursive: true })
   const written = []
+
+  /**
+   * 先把上一轮的产物删掉。
+   *
+   * 为什么必须删（实测踩过）：本版 UI.md 插了一节，**后面的节号全体后移一位**——
+   * `07-手机端.png` 变成 `08-手机端.png`。不清理的话，目录里会同时留着
+   * `07-手机端.png`（旧）与 `07-主题管理页.png`（新），而 README 里
+   * `![7. 手机端](…/07-手机端.png)` 仍然指得到旧图——**图与正文对不上，且没人会发现**。
+   * 本仓的老教训正是「图与正文对不上比没图更糟」。
+   */
+  for (const stale of readdirSync(OUT_DIR)) {
+    if (stale.endsWith('.png')) rmSync(join(OUT_DIR, stale), { force: true })
+  }
 
   /* --------------------------- 0) 首页速览图 --------------------------- */
   /**

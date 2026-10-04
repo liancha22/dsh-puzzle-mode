@@ -4,10 +4,11 @@
 
 ## 0. 状态
 
-| 项 | 现状（2026-10-03） |
+| 项 | 现状（2026-10-04） |
 | --- | --- |
 | 仓库 | <https://github.com/liancha22/dsh-puzzle-mode>（public） |
-| 版本 | v0.24.2（**修审查器没跟上「项目规模」——大档项目被全线误报**，用户报「审查器没有同步规模改动 / 看看提示词有没有旧的无规模的限制提示词」，两处都成立。① **审查器三处写死中档上限**：条数上限用 `ENTRY_CAPS`（4/10）而非 `capsOfSize(档位)`；模块 / 主文档条目字数用 `MODULE_ENTRY_SPEC` / `MAIN_ENTRY_SPEC`（源自中档 `ENTRY_LIMITS`）而非按档位取。写入侧一直按档位放行、审查侧却拿中档量——**大档项目（要点 40 字 / 已定 30 条）每条合法内容都被报成违规**，即本仓记过的「两把尺子」。实测对照（大档写 31 字要点 + 12 条已定）：修前报「要点超长 limit 20」+「已定 12 条超上限 10 条」，修后两条归零。新增 `mainEntrySpecOf(size)` / `moduleEntrySpecOf(size)`，`moduleEntries` 加 `size` 参数（默认中档，旧调用点行为不变）。② **提示词四处旧上限**：文档锁理由（每次拦 write/edit 都回给模型）、提示段「文档分工」、「条目级发现优先」、工具 schema 的 `content` 说明都写死中档值；而提示段**自己两说并存**（一行说死数字、下一行说别信死数字）。统一改成「随项目规模变，以 `op:read` / `op:size` 的 `limits` 为准」；工具 schema 保持静态（提示缓存），工作流名字 / 步数上限仍写死（与规模无关）。新增 1 条断言**双向**钉住（大档不误报 + 中档已有的超长条目仍须被报；只测前者的话把上限改成 `Infinity` 也能绿），反向构造走直接写文件——写入侧会直接拒绝超长条目，用它造数据落不了盘。两处**变异验证均红**。跨插件契约未动，三处段序 10120 一致、六条条款全在、互校 18/0。测试 60+41+7+49+13 全绿） |
+| 主题仓库 | <https://github.com/liancha22/dsh-puzzle-themes>（**新增**；主题不随插件打包，点一下从它下载） |
+| 版本 | v0.25.0（**换主题：主题不在包里，点一下从主题仓库下**。面板右上角一颗主题图标 → 全屏主题管理页：卡片墙 + 「下载并应用」+ 卸载 + 顶部常驻「恢复默认」。① **主题不随插件打包**：`package.json` 的 `files` 里没有任何主题目录、`lib/` 下没有 `.css`，皮肤全部从主题仓库现取；新增两条**双向**守卫（`files` 不含主题目录 **且** 下载通路必须在包里——只测前者的话把功能删了也算通过）。② **下载链路**：先拉几 KB 的 `index.json`（列表 + 预览色 + `sha256`），点应用才下该主题 CSS；镜像 jsDelivr → gh-proxy → raw 顺序回退（本机实测 GitHub 直连超时、raw 也不通，只有前两条可用，单镜像方案不可接受）；下完比对 `sha256`，不符拒绝安装且**不覆盖**已装主题；落盘 `$DSH_HOME/puzzle-mode-themes/<id>.css`；清单拉不到就用上次缓存并明示「当前离线」。③ **只允许 CSS**（用户先选「允许带 JS」后改口「不要 JS，只 CSS」，以后者为准）：插件里没有任何 JS 求值路径。白名单拒绝 `@import` / 外部 `url()` / `javascript:` / `expression(` / `</` / 花括号不配平 / 越界选择器；`html` 与 `:root` 块里**只能声明 `--dshpz-*`**（实测抓到 `html.dark{…}` 曾被前缀判断放过，已改成全等判断）；`url(data:image/…)` 放行、`@media`/`@supports` 递归逐条判、`@keyframes` 放行。④ **小按钮跟着换皮**：令牌原先声明在 `.dshpz-panel` 上，而小按钮属于 `conversation.input.left`、不在那个节点里，`var(--dshpz-*)` 全部取不到值；改为挂 `:root`，作用域靠前缀 + `.dshpz-*` 选择器收窄。⑤ 新仓 `dsh-puzzle-themes`：`themes/<id>/{manifest.json,theme.css}` + `tools/build-index.mjs` 现算清单（hash 手写必漂移），首发 4 套（樱花 / 墨黑 / 终端绿 / 深海）；插件侧新增 `tools/verify-themes.mjs`（拿插件自己的校验器验主题仓库实际产物，`--remote` 走真实下载路径验镜像）。⑥ 新增 `test/70-themes.test.mjs` 36 项，关键一组是拿同一批恶意样本**同时喂给宿主半与浏览器半**（浏览器半是手写 module-loader 包、拿不到 ESM 导出，所以重复实现了硬规则；重复实现必然漂移，除非有测试同时钉两边）；`test/30-rpc.test.mjs` 补 6 条 theme RPC 用例，全部在**未绑项目**的会话上跑以钉住「主题与项目无关」。顺手修掉 10-puzzle 里一处不可移植断言（写死 `/tmp`，Windows 上恒红）。测试 60+47+7+49+13+36 全绿，跨插件握手 18/0） |
 | 兼容 | DSH `^0.1.5-alpha.1 \|\| ^0.1.6-alpha.1 \|\| ^0.1.7-alpha.1 \|\| ^0.2.0-rc.1`（peer 只声明 `@deepseek-ai/dsh-tools`；13 个已发布版本全覆盖） |
 | Release | <https://github.com/liancha22/dsh-puzzle-mode/releases> |
 | npm | **未发布**（本机装的是 GitHub 源） |

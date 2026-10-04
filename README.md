@@ -17,7 +17,8 @@
 不是独立模式：装进宿主组合后，**标准模式（或任何 preset）的会话**都带上它。
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
-- 最新版：**v0.24.2** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
+- 最新版：**v0.25.0** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -28,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.24.2
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.25.0
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -39,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-0.24.2.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.24.2/dsh-puzzle-mode-0.24.2.tgz)
+[dsh-puzzle-mode-0.25.0.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.25.0/dsh-puzzle-mode-0.25.0.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -56,6 +57,54 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ---
 
 ## 最新版本
+
+### v0.25.0 · 换主题：主题不在包里，点一下从主题仓库下
+
+面板右上角多了一颗**主题图标**，点进去是全屏主题管理页：卡片墙 + 下载并应用 + 卸载 +
+顶部常驻「恢复默认」。主题**不随插件打包**——包里只有代码，皮肤全部从
+[dsh-puzzle-themes](https://github.com/liancha22/dsh-puzzle-themes) 现取。
+
+**下载链路**（本机实测 GitHub 直连超时，所以不能只靠一条路）：
+
+| 环节 | 做法 |
+| --- | --- |
+| 清单 | 先拉一个几 KB 的 `index.json`（列表 + 预览色 + `sha256`），点应用才下该主题的 CSS |
+| 镜像 | jsDelivr → gh-proxy → raw.githubusercontent **顺序回退**，任一可用即可 |
+| 校验 | 下完比对清单里的 `sha256`，不符**拒绝安装**（不覆盖已装的好主题） |
+| 落盘 | `$DSH_HOME/puzzle-mode-themes/<id>.css`，跨工作区跨会话共享 |
+| 离线 | 清单拉不到就用上次成功的缓存，并在页面上明说「当前离线」 |
+
+**主题只能是 CSS**，这是硬约束不是建议。上一轮先选了「允许主题带 JS」，随后改口
+「不要 JS，只 CSS」——以后者为准，所以插件里**没有任何 JS 求值路径**，主题带脚本也执行不了。
+下载的 CSS 逐条过白名单：
+
+| 拒绝的写法 | 原因 |
+| --- | --- |
+| `@import`、`url(http…)` | 能把外部资源拉进页面（跟踪像素 / 远程字体 / 侧带数据） |
+| `javascript:`、`expression(…)` | 等于在 CSS 里执行 JS |
+| 出现 `</` | 能提前闭合 `<style>`，把后面变成 HTML |
+| 花括号不配平 | 后续规则会跑进别的规则里，静默破坏样式 |
+| 选择器不含 `.dshpz-`（且不是 `:root`/`html`） | 越界：作用域只有**面板 + 那颗小按钮** |
+| `html.dark{…}`、`:root{color:red}` | `html`/`:root` 块里**只能声明 `--dshpz-*`** |
+
+`url(data:image/…)` 内联图放行（不产生外部请求）；`@media` / `@supports` 里的规则逐条判；
+`@keyframes` 放行。
+
+**小按钮也跟着换皮**：面板令牌原先声明在 `.dshpz-panel` 上，而小按钮不在那个节点里
+（它属于 `conversation.input.left`），所以 `var(--dshpz-*)` 一律取不到值——「跟着变色」
+根本做不到。本版把令牌改挂 `:root`，作用域靠 `--dshpz-` 前缀与 `.dshpz-*` 选择器收窄。
+
+**主题作者视角**：`themes/<id>/{manifest.json,theme.css}`，加完跑
+`node tools/build-index.mjs` 重算清单（hash 由脚本现算，手写必漂移）。
+仓库首发了 4 套：樱花 / 墨黑 / 终端绿 / 深海。
+
+**测试**：新增 `test/70-themes.test.mjs`（36 项）。其中最关键的一组是拿**同一批恶意样本
+同时喂给宿主半与浏览器半**——浏览器半是手写 module-loader 包，拿不到 ESM 导出，
+所以它**重复实现**了一遍硬规则；重复实现必然漂移，除非有测试同时钉两边。
+另加两条「主题不在打包里」的双向守卫：`files` 不含主题目录 **且** 下载通路必须在包里
+（只测前者的话，把功能删了也算通过）。
+
+`npm test` 全绿：60 + 47 + 7 + 49 + 13 + 36；跨插件握手 18 / 0。
 
 ### v0.24.2 · 审查器没跟上「项目规模」——大档项目被全线误报
 
@@ -117,30 +166,6 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 随之成为孤儿的 `inbox` 图标一并清掉。
 
 新增 8 条断言（接续 5 条 + 空态 3 条），**变异验证均红**。
-`npm test` 全绿：59 + 41 + 7 + 49 + 13；跨插件握手 18 / 0。
-
-### v0.24.0 · 重复思考熔断：模型绕圈时把它推出去
-
-长任务里模型会陷进「同一步反复做同一件事」——反复读同一个文件、反复跑同一条命令。
-每一轮都要把**整个上下文重发一遍**，空转的每一轮都是实打实的成本；而模型自己往往
-出不来，因为它**看不到「我刚做过」**。本版给宿主加了一道熔断：**同一个工具连续 3 次
-用同样的参数调用**，就注入一条提示，把模型推出去。
-
-- **判据是工具调用签名**（工具名 + **键排序后**的参数），不是推理文本。抓思维链要读
-  reasoning，形状随模型/版本变、拿不稳；动作层的指纹稳定且可纯函数测试。
-  键排序是必须的：不排序时 `{a,b}` 与 `{b,a}` 会算出**两个签名**，连击永远数不到 3，
-  熔断就成了**永不触发的死代码**。
-- **挂在 `tools/post-execute`**，不是 `agent/pre-step`——后者 `decision.messages` 的契约是
-  `UserMessage[]`，**读不到 tool-call**（本仓在 40-pre-execute 的开头已用假绿换过这个教训）。
-  `post-execute` 的 `additionalContexts` 是唯一能「不拦、不打断、只提醒一句」的通道。
-- **三条误报防线**（宁可漏报，不可误伤）：无参调用一律不计（`job_list` / 截图这类轮询
-  反复调是正常行为）；阈值 3（连续 2 次极常见——改完再跑一次测试）；同一段连击只报一次
-  （报过要等签名变了才重新武装，否则第 4、5 次各报一条，比不报更烦）。
-- **提示给三条出路**：换输入 / 换动作 / 停下来说清卡点。语气是陈述事实 + 给出口，
-  不是训斥——模型不是不听话，是它看不到自己刚做过。只说「别重复」等于没给信息。
-- 提示段补第二道兜底（hook 判定 + 提示段），与「首轮自动判定」同一条设计。
-
-新增 13 条断言，**两处变异验证都真的红了**（拆掉钩子 / 去掉键排序）。
 `npm test` 全绿：59 + 41 + 7 + 49 + 13；跨插件握手 18 / 0。
 
 ## 功能

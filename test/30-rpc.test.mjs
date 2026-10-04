@@ -690,6 +690,96 @@ try {
     ok('RPC 写操作（mode / size / current）→ 都回完整绑定组且值是新的')
   }
 
+  /* ------------------------- 主题 RPC（v0.25.0） ------------------------- */
+
+  /**
+   * 主题是**与项目无关**的一条通道（用户裁定「全局记忆，所有会话生效」），
+   * 所以它的用例刻意在一个**没绑项目**的会话上跑：若哪天有人在实现里顺手读了
+   * 项目文档，这些用例就会红——这正是它们存在的意义。
+   *
+   * 这里只测「不联网」的那些 action：`overview` / `css` / `reset` / `uninstall` /
+   * `repo`。`list` / `install` 要真联网，靠 `tools/verify-themes.mjs --remote`
+   * 与 `test/70-themes.test.mjs` 的纯函数覆盖；在单测里发真请求会让 CI 依赖外网。
+   */
+  {
+    const handler = captureRoute()
+    const unbound = { method: 'theme', action: 'overview', sessionId: 'session-theme-noproject' }
+    const out = await call(handler, { body: JSON.stringify(unbound) })
+    assert.equal(out.status, 200, '主题 RPC 不该要求会话绑定项目')
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.current, '', '没装主题时当前主题是空串')
+    assert.equal(out.body.result.apiVersion, 1, '面板要拿到接口版本（与主题清单比对）')
+    assert.ok(Array.isArray(out.body.result.installed), 'installed 必须是数组（前端直接 map）')
+    assert.ok(typeof out.body.result.repo === 'string' && out.body.result.repo !== '', '要有默认主题源')
+    assert.ok(typeof out.body.result.dir === 'string' && out.body.result.dir !== '', '要回报缓存目录（排障用）')
+    ok('RPC theme overview → 与项目无关，回报当前/已装/源/目录')
+  }
+
+  {
+    const handler = captureRoute()
+    // 没装主题时读当前 CSS：必须是 `ok:true` + 空串，而不是报错。
+    // 面板的按钮**每次都调它**，报错会让按钮上出现一条与用户无关的红字。
+    const out = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'css', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, true, '没有主题不是错误')
+    assert.equal(out.body.result.css, '', '没有主题时 CSS 是空串')
+    ok('RPC theme css → 无主题时返回空串而不是报错（按钮会常调它）')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'reset', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, true)
+    assert.equal(out.body.result.id, '', '恢复默认后当前主题是空')
+    assert.equal(out.body.result.css, '', '恢复默认要**同时**把 CSS 清成空串——只清 id 面板还挂着旧皮肤')
+    ok('RPC theme reset → 清掉当前主题与 CSS')
+  }
+
+  {
+    const handler = captureRoute()
+    // 卸载一个没装过的主题：要 `ok:false` 并带原因，不能假装成功。
+    const out = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'uninstall', id: 'ghost', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(out.status, 200)
+    assert.equal(out.body.ok, false, '卸载没装过的主题必须失败')
+    assert.match(String(out.body.error), /没装/)
+    ok('RPC theme uninstall → 没装过就如实失败（不假装成功）')
+  }
+
+  {
+    const handler = captureRoute()
+    const bad = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'repo', repo: 'not a repo', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(bad.body.ok, false, '非法主题源要被拒（会被拼进 URL）')
+    const good = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'repo', repo: 'me/themes', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(good.body.ok, true)
+    assert.equal(good.body.result.repo, 'me/themes')
+    // 收尾：把源改回默认，免得影响同进程里后面的用例（主题状态是全局文件）。
+    const back = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'repo', repo: '', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(back.body.result.repo, 'liancha22/dsh-puzzle-themes', '空串 = 回到默认源')
+    ok('RPC theme repo → 非法值被拒，空串回默认源')
+  }
+
+  {
+    const handler = captureRoute()
+    const out = await call(handler, {
+      body: JSON.stringify({ method: 'theme', action: 'nope', sessionId: 'session-theme-noproject' }),
+    })
+    assert.equal(out.status, 400, '未知 theme action 要 400，不能静默当 overview')
+    ok('RPC theme 未知 action → 400（不静默兜底）')
+  }
+
   console.log(`\n${passed} 项通过`)
 } finally {
   rmSync(root, { recursive: true, force: true })

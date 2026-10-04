@@ -917,13 +917,19 @@ try {
       assert.equal(sizeOfProject(dir, 'p'), SIZE_LARGE, '取证：起始档位是「大」')
       const mainDoc = join(dir, 'p', PUZZLE_DIR, MAIN_FILE)
       const read = () => readFileSync(mainDoc, 'utf8')
+      // 源码根必须指向一个**真实存在且含源码文件**的目录，否则 `setSourceRoot` 会正当拒绝。
+      // 这里不能写死 `/tmp`：那是 POSIX 路径，Windows 上不存在——本用例曾在 Windows 上
+      // 恒红，红的原因却是「测试不可移植」，不是被测行为有问题。
+      const srcDir = join(dir, 'src')
+      mkdirSync(srcDir, { recursive: true })
+      writeFileSync(join(srcDir, 'a.js'), '// 一个源码文件，只为让目录通过源码根校验\n')
 
       const paths = [
         ['op:main 写坑', () => updateMainSection(dir, 'p', 'pit', '- 一条坑（源码: lib/a.js:1）', true)],
         ['op:main 写工作流', () => updateMainSection(dir, 'p', 'workflow', '### 流程\n- 步骤一', true)],
         ['op:module 写模块', () => updateModuleSection(dir, 'p', 'm1', 'points', '- 一个要点（源码: lib/a.js:1）', true)],
         ['改模式', () => setMode(dir, 'p', MODE_PUZZLE_ONLY)],
-        ['改源码根', () => setSourceRoot(dir, 'p', '/tmp')],
+        ['改源码根', () => setSourceRoot(dir, 'p', srcDir)],
         ['写会话绑定', () => writeSessionList(mainDoc, read(), ['sess', 'sess2'], ['sess'])],
         ['写工作流归档', () => writeWorkflowDoc(mainDoc, read(), [], [])],
       ]
