@@ -1036,3 +1036,113 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
   assert.equal(created[created.length - 1].goal, '一句话')
   console.log('ok   空态表单直建：三个输入框在场，填名 → 发 method:create（不经过模型，模块名按分隔符切）')
 
+/* ---------- 面板不叠遮罩 / 主题页是主界面切换，不是第二层浮层（v0.27.1） ---------- */
+
+/**
+ * 用户两条原话：「打开面板的遮罩删掉」「换成主题页改为直接切换原本的主界面」。
+ *
+ * 两条都是**同一类问题**：屏幕上不该同时出现两层「面板」。所以断言也按这个形状写：
+ *
+ *   ① 主界面：整棵树里**没有** `background` 遮罩（样式表里 `.dshpz-backdrop` 不再压暗，
+ *      内联兜底也不再写 rgba —— 只删样式表、兜底又写回来是**假修**，这条能抓到）；
+ *   ② 主题页：它**就是**面板主体（`.dshpz-panel` 恰好一层），不是 `.dshpz-tlayer`
+ *      那种全屏浮层；两层玻璃框、两个关闭按钮都不许再出现。
+ *
+ * 为什么断言「整棵树的层数」而不是断言某个类名存在：这次的 bug 特征正是
+ * **多一层看不出来**（视觉上只是玻璃底变厚、Esc 要多按一次），
+ * 只有数层数才抓得住。
+ */
+{
+  const thReqs = []
+  const thWindow = {
+    __ModuleLoader__: { load(entry) { thReqs.push(entry) } },
+    setInterval() { return 1 }, clearInterval() {}, addEventListener() {}, removeEventListener() {},
+  }
+  const thState = {
+    ok: true, initialized: true, projectRoot: '/tmp/ws-th', projectDir: '/tmp/ws-th/demo/拼图',
+    project: 'demo', mode: '写后再拼', health: 77, version: 7, dimensions: {}, modules: [], findings: [],
+    bindings: [{ project: 'demo', current: true, mode: '写后再拼', health: 77, moduleCount: 1, initialized: true }],
+    currentProject: 'demo', bindingWarnThreshold: 8, size: SIZE_MEDIUM,
+    theme: { current: '', currentName: '', installed: [], repo: 'liancha22/dsh-puzzle-themes', apiVersion: 1, dir: '/tmp/themes' },
+    limits: {
+      askQuestions: 10, askOptions: 10, entryLimits: ENTRY_LIMITS, entryCaps: capsOfSize(SIZE_MEDIUM),
+      workflowNameLimit: WORKFLOW_NAME_LIMIT, workflowStepLimit: WORKFLOW_STEP_LIMIT, workflowMaxSteps: 12,
+      bindingWarnThreshold: 8, sizeCaps: SIZE_CAPS, sizes: SIZES,
+    },
+  }
+  const thFetch = (url, options) => {
+    const body = JSON.parse(options.body)
+    let result
+    if (body.method === 'state') result = thState
+    else if (body.method === 'list') result = { ok: true, projects: [{ name: 'demo', health: 77 }] }
+    else if (body.method === 'theme') result = { ok: true, themes: [], tried: [] }
+    else result = { ok: true }
+    return Promise.resolve({ json: () => Promise.resolve({ ok: true, result }) })
+  }
+  new Function('window', 'document', 'fetch', source)(
+    thWindow,
+    { createElement: () => ({ setAttribute() {}, textContent: '' }), head: { appendChild() {} }, body: {} },
+    thFetch,
+  )
+  const thMod = thReqs[0].factory((name) => {
+    if (name === 'react') return fakeReact
+    throw new Error('unexpected require: ' + name)
+  })
+  const thRegistered = []
+  const thSlots = {
+    inject(name, callback) { callback(); return () => {} },
+    register(options, component) { thRegistered.push({ options, component }); return () => {} },
+  }
+  thMod.apply({ get: (name) => (name === 'slots' ? thSlots : undefined), effect: () => () => {} })
+  const thButton = thRegistered.find((row) => row.options.name === 'conversation.input.left')
+  const thPanel = thRegistered.find((row) => row.options.name === 'shell.overlay')
+  thButton.component({ sessionId: 'session-theme-view', inputActions: { setDraft() {}, submit() {} } }).props.onClick()
+  await flush()
+  let thTree = thPanel.component({})
+
+  /** 数出某个类名在整棵树里出现的次数。 */
+  const countClass = (tree, className) => findAll(tree, (node) => typeof node === 'object' && node !== null
+    && node.props !== undefined && typeof node.props.className === 'string'
+    && node.props.className.split(/\s+/).includes(className)).length
+
+  /* ① 遮罩：样式表与内联兜底都不许再有压暗底色。 */
+  const backdropCss = mod.CSS.split('\n').find((line) => line.indexOf('.dshpz-backdrop{') === 0) || ''
+  assert.ok(backdropCss !== '', '样式表里必须还有 .dshpz-backdrop 这条（它负责居中与点外部关闭）')
+  assert.ok(!/background/.test(backdropCss), '遮罩层不许再画背景（用户要求删掉遮罩），实际：' + backdropCss)
+  const backdropNode = findAll(thTree, (node) => typeof node === 'object' && node !== null
+    && node.props !== undefined && typeof node.props.className === 'string'
+    && node.props.className.split(/\s+/).includes('dshpz-backdrop'))[0]
+  assert.ok(backdropNode !== undefined, '主界面仍要有那层定位壳（居中 + 点外部关闭）')
+  assert.equal(backdropNode.props.style.background, undefined,
+    '内联兜底也不许写 background —— 否则「样式表删了、兜底又加回来」是假修')
+  console.log('ok   面板遮罩：样式表与内联兜底都不再压暗（点外部关闭与居中仍在）')
+
+  /* ② 主题页 = 主界面切换：一层面板，不是第二层全屏浮层。 */
+  const themeIcon = findAll(thTree, (node) => typeof node === 'object' && node.type === 'button'
+    && node.props !== undefined && typeof node.props.onClick === 'function'
+    && node.props.title !== undefined && String(node.props.title).indexOf('主题') === 0)[0]
+  assert.ok(themeIcon !== undefined, '面板一角要能找到主题入口按钮')
+  assert.equal(countClass(thTree, 'dshpz-panel'), 1, '主界面同时只能有一层 .dshpz-panel')
+
+  themeIcon.props.onClick()
+  thTree = thPanel.component({})
+  assert.equal(countClass(thTree, 'dshpz-tlayer'), 0, '主题页不许再是全屏浮层（dshpz-tlayer 应已删除）')
+  assert.equal(countClass(thTree, 'dshpz-tpanel'), 0, '主题页不许再有第二套玻璃框（dshpz-tpanel 应已删除）')
+  assert.equal(countClass(thTree, 'dshpz-panel'), 1,
+    '主题页就是面板主体本身：整棵树仍只有一层 .dshpz-panel（多一层＝又叠回去了）')
+  // 主题页在场：它的标题与卡片区在。
+  assert.ok(findAll(thTree, (node) => node === '主题').length >= 1, '切过去要真的是主题页')
+  // 语义是「返回」而不是第二个「关闭」：按钮文案要点名返回，免得用户分不清哪个关面板。
+  // 文案在 `span` 里（`h('button', …, h('span', null, '← 返回'))`），所以按**子树**找，
+  // 不能只比 button 的直接子节点。
+  const backBtn = findAll(thTree, (node) => typeof node === 'object' && node !== null && node.type === 'button'
+    && findAll(node, (child) => child === '← 返回').length > 0)[0]
+  assert.ok(backBtn !== undefined, '主题页要有「返回」而不是第二个「关闭」（两个 × 会让人分不清）')
+  backBtn.props.onClick()
+  thTree = thPanel.component({})
+  assert.ok(findAll(thTree, (node) => typeof node === 'object' && node !== null
+    && node.props !== undefined && typeof node.props.className === 'string'
+    && node.props.className.split(/\s+/).includes('dshpz-body')).length >= 1, '点返回要真的回到三栏主界面')
+  console.log('ok   主题页：直接切换主界面（全树只有一层 .dshpz-panel），返回回到项目面板')
+}
+
