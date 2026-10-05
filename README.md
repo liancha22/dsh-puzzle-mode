@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v0.27.0** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v0.27.1** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.27.0
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.27.1
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-0.27.0.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.27.0/dsh-puzzle-mode-0.27.0.tgz)
+[dsh-puzzle-mode-0.27.1.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.27.1/dsh-puzzle-mode-0.27.1.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -57,6 +57,33 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ---
 
 ## 最新版本
+
+### v0.27.1 · 删掉面板遮罩；主题页改为主界面切换
+
+两条都是**观感**问题，来自用户直接点名：「打开面板的遮罩删掉」「换成主题页改为直接切换
+原本的主界面」。它们其实是**同一类毛病**：屏幕上不该同时出现两层「面板」。
+
+**① 遮罩删掉**：`.dshpz-backdrop` 不再压暗宿主 UI（去掉 `rgba(0,0,0,.45)`），只保留
+「全屏居中 + 点外部关闭」。面板自己的玻璃底（`--dshpz-glass` + `backdrop-filter`）
+已经保证可读性，那层黑是多余的。**内联兜底里那句 `background` 也一起删**——
+只改样式表、兜底又写回来，那是**假修**，测试专门钉了这一点。
+
+**② 主题页不再叠第二层**：原先点主题图标会压出一层 `.dshpz-tlayer` 全屏覆盖层
+（还带 `clip-path` 从图标生长的动画），于是屏幕上同时存在**两套玻璃框、两个关闭按钮、
+两级 Esc**。现在它复用 `.dshpz-panel`、**替换**三栏主体，与主界面共用同一层 backdrop
+——面板从头到尾只有一层。随之删掉 `.dshpz-tlayer` / `.dshpz-tpanel` /
+`@keyframes dshpz-tgrow` 与 `themeOrigin`（生长动画的圆心）。
+
+顶栏那颗「关闭主题」改成 **`← 返回`**：主题页是主界面的一个视图，关掉它等于关掉整个面板，
+而那是右上角 `✕` 的事——两个 `✕` 会让人分不清。
+
+**测试**：`20-client` 新增 2 条回归断言，判据是**数层数**（`dshpz-panel` 在整棵树里
+必须恰好 1 个）与**查底色**（样式表与内联兜底都不许有 `background`）。
+为什么这么写：这次的毛病特征正是「多一层看不出来」，只有数层数才抓得住。
+**两处变异验证均红**：把 `rgba` 加回去 → 底色那条红；在主题页外面再包一层 `panel`
+→ 层数那条红。
+
+`npm test` 全绿：60 + 47 + 7 + 51 + **17** + 36 + 12 + 5；跨插件握手 18 / 0。
 
 ### v0.27.0 · 熔断之后继续推：报过不再闭嘴，第二次起撤掉「转人工」
 
@@ -119,37 +146,6 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 > 这就是为什么加的是**工具级**测试——给 `lib/source.js` 补单测会全绿，而真机照旧报错。
 
 `npm test` 全绿：60 + 47 + 7 + 51 + 13 + 36 + 12 + 5；跨插件握手 18 / 0。
-
-### v0.26.0 · 固定收尾问可全局关闭
-
-用户原话：「提问到最后还要选继续还是停下？的功能加一个全局关闭功能。」
-
-面板左栏多了一颗 **`固定收尾问：开 · 点此关闭`**。关掉之后：
-
-- **提示段**换成另一份正文（明说「已全局关闭、不要再问」，并要求「问到实质问题就结束」）；
-- **工具返回**里 `askPause` 变 `false`，且**不再下发** `pauseQuestion` / `pauseOptions`
-  ——留着文案比不带更糟：模型看到它就会继续问，「关掉了」变成一句空话；
-- **拒绝理由**里也不再复述收尾问（否则等于用一个提示把用户的设置又打开一遍）；
-- 面板右栏那句「每次提问的最后都会问…」如实改成「已全局关闭」。
-
-**默认是开**，而且设置文件里**缺这个字段也算开**——语义是「默认行为」而不是「新特性」，
-反过来（缺=关）会让所有老用户的提问静默变了行为，比功能本身严重得多。
-
-**作用范围**：全局，写进 `$DSH_HOME/.dsh-puzzle-mode.json`，跨会话跨项目一致。
-它与左栏那颗「关掉本会话的拼图模式」**是两个开关**，共用同一个文件但互不覆盖
-（任一侧写入都带上另一侧）——本仓记过「同名不同形的字段会互相盖掉」，所以专门有断言钉着。
-
-**顺手修掉一处测试脆弱性**：`10-puzzle` / `30-rpc` 里的断言会去读**运行者真实的**
-`DSH_HOME`，用户一旦关掉收尾问，`npm test` 就红而代码没错。现在统一走
-`test/helpers/isolate-home.mjs`（必须在其它 import 之前——ESM 的 import 会被提升，
-写在文件中间赋值环境变量**太晚了**）。实测：把真实设置改成关闭，全套测试仍绿。
-
-**测试**：新增 `test/80-ask-pause.test.mjs`（12 项，含「缺字段=开」「坏值一律当开」
-「两个开关互不覆盖」）；`50-contract` 补 2 条契约锚；新增
-`tools/verify-ask-pause.mjs`（7 项，走**真实 RPC** 验「设置 → 返回 → 提示段」三处接线，
-因为纯函数全绿而接线断了正是本仓反复记过的假绿）。
-
-`npm test` 全绿：60 + 47 + 7 + 51 + 13 + 36 + 12；跨插件握手 18 / 0。
 
 ## 功能
 
