@@ -23,6 +23,8 @@
  * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
  */
 import assert from 'node:assert/strict'
+// **必须最先**：隔离 DSH_HOME（本钩子走 isSessionDisabled，会读全局设置）。
+import './helpers/isolate-home.mjs'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

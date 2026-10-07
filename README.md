@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v0.27.1** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v0.28.0** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.27.1
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v0.28.0
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-0.27.1.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.27.1/dsh-puzzle-mode-0.27.1.tgz)
+[dsh-puzzle-mode-0.28.0.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v0.28.0/dsh-puzzle-mode-0.28.0.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -57,6 +57,52 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 ---
 
 ## 最新版本
+
+### v0.28.0 · 说话方式 + 读文件一次读全 + 催促
+
+用户一次点了三件事：「模型在几度陈述时会复读类似的意思，而且陈述用英语」「读文件老是
+分段读，不如直接一次读全部要的地方」「干活都磨磨唧唧的，加一个自动注入语音犀利的催促的功能」。
+
+前两条是**提示段规则**（模型每轮都读得到），第三条是**新注入**。
+
+**① 说话方式**（新增 `### 说话与干活` 一节）：
+
+- **一律用中文**：正文、结论、工具参数说明、代码注释都写中文；英文只留给标识符、
+  路径、命令与报错原文，不许用英文整段陈述。
+- **同一件事只说一遍**：结论写完就往下走；每轮开头不复述上一轮，直接给这一轮的
+  新结论或新动作。反复重述同一个意思（尤其连续几轮都在讲「我准备要做什么」）是纯成本。
+
+**② 读文件一次读全**：`read` 把 `limit` 给足，**不要一段一段读同一个文件**；
+要看好几个文件就**同一步里并行发多个 `read`**，别串着等。
+
+**③ 催促（新功能）**：只看不动时，宿主注入一条**语气犀利**的催促。判据是
+**连续只读调用**（`read` / `grep` / `glob`）没有产出，以及**同一个文件被读第二次**
+（正是用户说的「分段读」）：
+
+| 触发 | 阈值 | 文案 |
+| --- | --- | --- |
+| 只读连击 | 连续 6 次无产出 | 「停止检索，先产出一步」；每 4 次升级一档 |
+| 分段读 | 同一文件读第 2 次 | 「一次读全，`limit` 给足」，并点名是哪个文件 |
+
+档位加码方式是**撤出口**（与熔断同一手法）：第 1 档还允许「说清你在找什么」，
+第 2 档**禁掉只读工具**，第 3 档只留「写结论 + 执行下一步」。到顶后仍按间隔继续催——
+沉默比重复更贵。
+
+**误报防线**（宁可漏催，不可误催）：只读白名单**只有** `read` / `grep` / `glob`，
+其余一切（`write` / `edit` / `pwsh` / `bash`…）都算产出并**清空**连击；阈值取 6，
+连着读 5 个文件是正常调研；工具失败（block）时不插话——失败重试是正当行为。
+
+**测试**：新增 `test/100-nudge.test.mjs`（**21 项**），纯函数层 + 真钩子接线层，
+含 4 条「守卫自证」（持续产出不被催 / 读一次改一次不被催 / 工具失败不插话 /
+分段读只催一次）。**变异验证三处均红**：只读白名单混入 `write` → 红；
+催过就永久闭嘴（退回「只报一次」）→ 红；关掉分段读判定 → 红。
+
+**顺带修掉一个既有红**：`test/40-pre-execute.test.mjs` 没有隔离 `DSH_HOME`，
+于是它会去读**用户真实的设置**——用户在面板上关掉固定收尾问之后，那条
+「拒绝理由里必须复述固定收尾问」立刻变红，而代码一行没错（本机实测踩到）。
+已给 4 个漏掉隔离的测试文件补上 `helpers/isolate-home.mjs`（该文件早就写着这条纪律）。
+
+`npm test` 全绿：60 + 47 + 7 + 51 + 17 + 36 + 12 + 5 + **21**；跨插件握手 18 / 0。
 
 ### v0.27.1 · 删掉面板遮罩；主题页改为主界面切换
 
@@ -124,28 +170,7 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 
 `npm test` 全绿：60 + 47 + 7 + 51 + **17** + 36 + 12 + 5；跨插件握手 18 / 0。
 
-### v0.26.1 · 修 op:audit 带源码体检必失败
-
-`puzzle_mode{op:'audit'}` 只要带源码体检（`source` 默认就是 `true`，也就是它的主用法），
-一律报 `tool "puzzle_mode" returned invalid output: value is not lossless JSON`；
-只有显式 `source:false` 能跑——而那等于放弃了源码体检。
-
-**根因**：宿主对工具返回做「无损 JSON」校验，要求能
-`JSON.parse(JSON.stringify(x))` **原样往返**，而**显式 `undefined`** 过不了这一关
-（`{file: undefined}` → stringify → `{}` → 不等于原值）。`lib/index.js` 把源码发现
-并进 `findings` 时无条件写了 `file: item.file`，而 `source_flat`（「N 个文件全在同一层目录」）
-与「另有 N 个函数超长」这两条是**项目级**发现、本来就没有单个文件。
-
-**修法**：字段**要么是字符串、要么根本不存在**。带 `file` 的发现照旧带，项目级的不再带。
-
-新增 `test/90-audit-tool.test.mjs`（5 项）：它不钉某个具体字段，而是断言**整个返回**
-能无损往返——不管以后哪个字段被写成 `undefined` 都会红。
-
-> 诊断过程值得记：`inspectSource` 与 `auditOf` **单独跑都是可序列化的**，
-> 所以问题只能在「组装工具返回」那一段，而那一段**只有真调一次工具才覆盖得到**。
-> 这就是为什么加的是**工具级**测试——给 `lib/source.js` 补单测会全绿，而真机照旧报错。
-
-`npm test` 全绿：60 + 47 + 7 + 51 + 13 + 36 + 12 + 5；跨插件握手 18 / 0。
+> 更早的版本（v0.26.1 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 功能
 

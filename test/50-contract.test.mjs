@@ -23,6 +23,8 @@
  * 这样「常量改了」与「契约改了」是同一件事，不存在两处各写一份再漂移的可能。
  */
 import assert from 'node:assert/strict'
+// **必须最先**：隔离 DSH_HOME（契约测试会读提示段，而提示段随全局开关分两份）。
+import './helpers/isolate-home.mjs'
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

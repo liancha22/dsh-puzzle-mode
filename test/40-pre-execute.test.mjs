@@ -14,6 +14,11 @@
  * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
  */
 import assert from 'node:assert/strict'
+// **必须最先**：把 DSH_HOME 指到临时目录。
+// 不隔离就会读用户**真实**的设置：用户在面板上关掉固定收尾问之后，
+// 下面那条「拒绝理由里必须复述固定收尾问」立刻变红，而代码一行没错——
+// 实测踩到过（真实设置里 askPause:false）。
+import './helpers/isolate-home.mjs'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
