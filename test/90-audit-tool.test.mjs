@@ -116,6 +116,39 @@ try {
   }
   ok('带 file 的源码发现仍是字符串（没修成一律不带）')
 
+  /* ---------- v0.30.0：结构类发现**不进 fixPlan**（用户裁定） ---------- */
+  //
+  // 用户原话：「自动审查就不要再报巨函数问题了，这些留到手动审查再说，
+  // 自动审查只找代码漏洞和修复漏洞」。
+  //
+  // 判据是**两头**：① 结构类一条都不许进 fixPlan；② 但它们**必须仍在 findings 里**
+  // （手动审查要看）。只验①会把「干脆不算了」也判成通过——那是另一种错。
+  const structureRows = audit.fixPlan.filter((row) => row.kind === 'structure')
+  assert.equal(structureRows.length, 0,
+    '结构类（巨函数 / 大文件 / 目录不分层 / 死导出）不许进 fixPlan：' + JSON.stringify(structureRows.map((r) => r.target)))
+  ok('fixPlan 里没有任何 structure 条目（自动审查只报漏洞）')
+
+  // ② 数据照算：那条 source_flat 仍在 findings 里，手动审查拿得到。
+  assert.ok(audit.findings.some((row) => row.id === 'source:source_flat'),
+    '结构类发现必须**仍在 findings 里**——不进清单不等于不算（手动审查要看）')
+  ok('结构类发现仍在 findings 里（不进清单 ≠ 不算）')
+
+  // 源码体检本身也照旧：五维真实值仍要用它，别把体检一起砍了。
+  assert.ok(audit.source !== undefined || audit.findings.some((row) => row.id.startsWith('source:')),
+    '源码体检结果仍要返回（五维真实值依赖它）')
+  ok('源码体检仍照常返回（没被误砍）')
+
+  /* ---------- 没查到源码时仍要有一条告警（唯一的 structure 例外） ---------- */
+  //
+  // 这条**必须留着**：它不是「结构建议」，而是「这一轮没实测漏洞」的警告——
+  // 正好是自动审查最该说清的事。把它也砍掉，用户会以为「没报漏洞 = 没漏洞」。
+  const blind = await tool.execute({ op: 'audit', project: 'demo', source: false }, exec)
+  assert.equal(blind.ok, true)
+  const blindStructure = blind.fixPlan.filter((row) => row.kind === 'structure')
+  assert.equal(blindStructure.length, 1, '没查到源码时要**恰好**留一条告警：' + JSON.stringify(blindStructure))
+  assert.ok(String(blindStructure[0].fact).includes('没查到源码'), '那条告警要说清「没查到源码」：' + blindStructure[0].fact)
+  ok('没查到源码时仍留一条告警（唯一的 structure 例外）')
+
   /* ---------- 整个返回体都无损，不止 findings ---------- */
   assertLossless(audit.fixPlan, 'fixPlan')
   assertLossless(audit.dimensions ?? {}, 'dimensions')
