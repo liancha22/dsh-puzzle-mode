@@ -1,21 +1,20 @@
 /**
- * 催促（只看不动）测试：纯函数层 + 真钩子接线层。
+ * 催促（每 N 步一次）测试：纯函数层 + 真钩子接线层。
  *
  *   node test/100-nudge.test.mjs
  *
  * ## 为什么要有这一组
  *
- * 用户原话：「干活都磨磨唧唧的，加一个自动注入语音犀利的催促的功能」。
- * 催促的价值全在**真的注入了**——一个永不触发的钩子（或反过来：见谁都催的噪音源）
- * 都会让这个功能变成摆设。所以这里两头都验：
- *   1. 该催的必须催（只读连击、同一个文件读第二次）；
- *   2. **不该催的一条都不许催**（写文件、跑命令、参数各不相同的正常调研）。
+ * 用户原话：「干活都磨磨唧唧的，加一个自动注入语音犀利的催促的功能」，
+ * 随后把口径钉死成**「我的意思是干什么都四步催一次」**——
+ * 是**纯节拍**，不是「连续只读才催」。第一版做成了后者，被当场纠正。
+ * 所以这里最关键的一条断言是：**读写混合的 4 步也必须催**。
  *
  * ## 断言为什么这么写
  *
  * 按本仓约定（`~/.dsh/AGENTS.md` 第 0.1 节）：**断言引常量**，
- * 阈值取 `NUDGE_READ_STREAK` 而不是写死 6；同时**必须**有「守卫真的会红」的自证——
- * 把只读白名单扩到所有工具、或把阈值调成 1，下面必有断言变红。
+ * 阈值取 `NUDGE_EVERY` 而不是写死 4；同时**必须**有「守卫真的会红」的自证——
+ * 把节拍改回「只读才算」、或让分段读顶掉节拍，下面必有断言变红。
  *
  * 宿主半 import 了 `@deepseek-ai/dsh-tools`（由 DSH 运行时提供）。在没装 DSH 的
  * 裸目录里这一组无法运行，此时**明确跳过**并说明原因，而不是抛 ERR_MODULE_NOT_FOUND。
@@ -27,12 +26,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  NUDGE_ESCALATE_EVERY,
+  NUDGE_EVERY,
   NUDGE_MARK,
   NUDGE_MAX_LEVEL,
-  NUDGE_READ_STREAK,
+  NUDGE_REASON_CADENCE,
   NUDGE_REASON_REPEAT,
-  NUDGE_REASON_STREAK,
   NUDGE_SAME_FILE,
   READ_ONLY_TOOLS,
   clearNudge,
@@ -102,133 +100,147 @@ async function fire(listener, exec) {
 }
 
 try {
-  /* ---------------- 纯函数层：判定 ---------------- */
+  /* ---------------- 纯函数层：节拍 ---------------- */
 
-  // 白名单必须**只有**只读工具：把 write / pwsh 混进来，催促就会打断正在干活的人。
-  assert.deepEqual([...READ_ONLY_TOOLS], ['read', 'grep', 'glob'], '只读白名单只能是 read / grep / glob')
-  assert.equal(isReadOnlyTool('read'), true, 'read 算只读')
-  assert.equal(isReadOnlyTool('grep'), true, 'grep 算只读')
-  assert.equal(isReadOnlyTool('write'), false, 'write 是产出，不算只读')
-  assert.equal(isReadOnlyTool('pwsh'), false, 'pwsh 是产出，不算只读')
-  assert.equal(isReadOnlyTool('puzzle_mode'), false, 'puzzle_mode 是产出，不算只读')
-  ok('只读白名单只含 read / grep / glob')
+  assert.equal(NUDGE_EVERY, 4, `用户裁定「干什么都四步催一次」，节拍必须是 4（当前 ${NUDGE_EVERY}）`)
+  ok(`节拍 = ${NUDGE_EVERY} 步（用户裁定值）`)
 
-  // 只有 read 有「同一个文件」这个概念；grep / glob 是范围检索，取不到单一目标。
-  assert.equal(readTargetOf('read', { file_path: '/a/b.txt' }), '/a/b.txt', 'read 的目标是 file_path')
-  assert.equal(readTargetOf('read', {}), '', 'read 没给 file_path → 空')
-  assert.equal(readTargetOf('grep', { path: '/a' }), '', 'grep 不是「同一个文件」')
-  assert.equal(readTargetOf('read', { file_path: '  ' }), '', '空白路径不算目标')
-  ok('只有 read 参与「分段读」判定')
-
-  // 未到阈值不许催：连着读几个文件是正常调研。
+  // **核心断言**：纯节拍——读写混合也必须在第 4 步催。
+  // 第一版是「连续只读才催」，这一条就是防它退回去的守卫。
   resetNudge()
-  for (let i = 1; i < NUDGE_READ_STREAK; i += 1) {
-    const step = noteCall('s1', 'read', { file_path: `/f${i}.txt` })
-    assert.equal(step.shouldNudge, false, `第 ${i} 次只读（未到阈值 ${NUDGE_READ_STREAK}）不该催`)
-    assert.equal(step.streak, i, `连击应记到 ${i}`)
+  const mixed = ['read', 'write', 'pwsh', 'read']
+  let cadenceHit = null
+  for (let i = 0; i < mixed.length; i += 1) {
+    const step = noteCall('s1', mixed[i], { file_path: `/m${i}.txt` })
+    assert.equal(step.count, i + 1, `第 ${i + 1} 步应记 ${i + 1}`)
+    if (step.shouldNudge) cadenceHit = step
+    else assert.equal(step.shouldNudge, false, `第 ${i + 1} 步（未到 ${NUDGE_EVERY} 的倍数）不该催`)
   }
-  const hit = noteCall('s1', 'read', { file_path: '/f-last.txt' })
-  assert.equal(hit.streak, NUDGE_READ_STREAK, `第 ${NUDGE_READ_STREAK} 次到阈值`)
-  assert.equal(hit.shouldNudge, true, '连续只读到阈值 → 必须催')
-  assert.equal(hit.reason, NUDGE_REASON_STREAK, '原因是「只读连击」')
-  assert.equal(hit.level, 1, '第一次催是第 1 档')
-  ok(`连续 ${NUDGE_READ_STREAK} 次只读 → 触发催促`)
+  assert.notEqual(cadenceHit, null, `读写混合走到第 ${NUDGE_EVERY} 步也必须催（纯节拍，不看工具类型）`)
+  assert.equal(cadenceHit.reason, NUDGE_REASON_CADENCE, '原因是「到节拍」')
+  assert.equal(cadenceHit.level, 1, '中间有产出 → 语气停在第 1 档（轻推，别骂干活的人）')
+  ok(`读写混合走到第 ${NUDGE_EVERY} 步 → 催（纯节拍，这是用户要的口径）`)
 
-  // 产出动作必须**清空**连击：写完文件还接着被催，等于催一个正在干活的人。
+  // 全是写（完全没有只读）也照样按节拍催。
   resetNudge()
-  for (let i = 0; i < NUDGE_READ_STREAK; i += 1) noteCall('s1', 'read', { file_path: `/g${i}.txt` })
-  const produced = noteCall('s1', 'write', { file_path: '/g.txt' })
-  assert.equal(produced.shouldNudge, false, 'write 是产出，不该被催')
-  assert.equal(produced.streak, 0, '产出后连击归零')
-  assert.equal(nudgeStateOf('s1'), null, '产出后状态整个丢掉（不跨段继承读过的文件）')
-  ok('产出动作清空连击（不误催正在干活的人）')
+  let allWrite = null
+  for (let i = 0; i < NUDGE_EVERY; i += 1) allWrite = noteCall('s2', 'write', { file_path: `/w${i}.txt` })
+  assert.equal(allWrite.shouldNudge, true, `全在写也要按节拍催（第 ${NUDGE_EVERY} 步）`)
+  assert.equal(allWrite.level, 1, '有产出 → 第 1 档')
+  ok('全是产出动作也按节拍催（第 1 档轻推）')
 
-  // 分段读：同一个文件读到第 NUDGE_SAME_FILE 次就要点名。
+  // 一直只读 → 档位逐次加硬（第 2 档禁只读，第 3 档只留交付）。
   resetNudge()
-  const firstRead = noteCall('s2', 'read', { file_path: '/same.txt' })
+  const levels = []
+  for (let i = 1; i <= NUDGE_EVERY * 3; i += 1) {
+    const step = noteCall('s3', 'read', { file_path: `/r${i}.txt` })
+    if (step.shouldNudge) levels.push(step.level)
+  }
+  assert.deepEqual(levels, [1, 2, 3], `一直只读时档位应逐次加硬，实际 ${JSON.stringify(levels)}`)
+  ok('一直只读 → 档位 1 / 2 / 3 逐次加硬')
+
+  // 档位封顶，但**节拍照旧**（沉默比重复更贵）。
+  resetNudge()
+  let maxLevel = 1
+  let refires = 0
+  for (let i = 1; i <= NUDGE_EVERY * (NUDGE_MAX_LEVEL + 3); i += 1) {
+    const step = noteCall('s4', 'read', { file_path: `/c${i}.txt` })
+    if (step.shouldNudge) { refires += 1; maxLevel = Math.max(maxLevel, step.level) }
+  }
+  assert.equal(maxLevel, NUDGE_MAX_LEVEL, `档位封顶 ${NUDGE_MAX_LEVEL}（不许无限加码）`)
+  assert.ok(refires >= NUDGE_MAX_LEVEL + 1, '封顶之后仍然继续按节拍催')
+  ok(`档位封顶 ${NUDGE_MAX_LEVEL}，且封顶后仍按节拍继续催`)
+
+  // 每轮都是 4 的倍数 → 等距，没有漏拍也没有多拍。
+  resetNudge()
+  const hits = []
+  for (let i = 1; i <= NUDGE_EVERY * 4; i += 1) {
+    const step = noteCall('s5', 'read', { file_path: `/e${i}.txt` })
+    if (step.shouldNudge && step.reason === NUDGE_REASON_CADENCE) hits.push(step.count)
+  }
+  assert.deepEqual(hits, [NUDGE_EVERY, NUDGE_EVERY * 2, NUDGE_EVERY * 3, NUDGE_EVERY * 4],
+    `节拍必须等距落在 ${NUDGE_EVERY} 的倍数上，实际 ${JSON.stringify(hits)}`)
+  ok(`节拍等距：第 ${NUDGE_EVERY} / ${NUDGE_EVERY * 2} / ${NUDGE_EVERY * 3} / ${NUDGE_EVERY * 4} 步各一次`)
+
+  // 分段读：同一个文件读到第 NUDGE_SAME_FILE 次额外点名，且**不吃掉节拍**。
+  resetNudge()
+  const firstRead = noteCall('s6', 'read', { file_path: '/same.txt' })
   assert.equal(firstRead.shouldNudge, false, '第一次读一个文件永远正常')
-  const secondRead = noteCall('s2', 'read', { file_path: '/same.txt' })
+  const secondRead = noteCall('s6', 'read', { file_path: '/same.txt' })
   assert.equal(secondRead.shouldNudge, true, `同一个文件读到第 ${NUDGE_SAME_FILE} 次 → 催「一次读全」`)
   assert.equal(secondRead.reason, NUDGE_REASON_REPEAT, '原因是「分段读」')
   assert.equal(secondRead.target, '/same.txt', '催促要点名是哪个文件')
   ok(`同一个文件读第 ${NUDGE_SAME_FILE} 次 → 触发「分段读」催促`)
 
   // 同一个文件只催一次：读十次催九次比不催更烦。
-  const thirdRead = noteCall('s2', 'read', { file_path: '/same.txt' })
-  assert.equal(thirdRead.shouldNudge, false, '同一个文件已经催过 → 不再重复催')
+  const thirdRead = noteCall('s6', 'read', { file_path: '/same.txt' })
+  assert.equal(thirdRead.reason, '', '同一个文件已经催过 → 不再重复催')
   ok('同一个文件只催一次（不刷屏）')
 
-  // 关键回归：催过之后**不许永久闭嘴**。模型没产出就每 NUDGE_ESCALATE_EVERY 次再催一次，
-  // 而且档位要加硬——删掉这条逻辑，催促会退化成「只报一次」= 静默失效。
+  // 分段读**不消费**节拍：两条触发各有各的节流。
   resetNudge()
-  for (let i = 0; i < NUDGE_READ_STREAK; i += 1) noteCall('s3', 'read', { file_path: `/h${i}.txt` })
-  let escalated = null
-  for (let i = 0; i < NUDGE_ESCALATE_EVERY + 2; i += 1) {
-    const step = noteCall('s3', 'read', { file_path: `/h-more-${i}.txt` })
-    if (step.shouldNudge) { escalated = step; break }
+  let cadenceAfterRepeat = null
+  for (let i = 1; i <= NUDGE_EVERY; i += 1) {
+    // 前两步读同一个文件（第 2 步触发分段读），后面继续走到节拍。
+    const name = i <= 2 ? 'read' : 'write'
+    const step = noteCall('s7', name, { file_path: i <= 2 ? '/dup.txt' : `/x${i}.txt` })
+    if (step.reason === NUDGE_REASON_CADENCE) cadenceAfterRepeat = step
   }
-  assert.notEqual(escalated, null, `没产出时每 ${NUDGE_ESCALATE_EVERY} 次必须再催一次（否则催促只报一次 = 静默失效）`)
-  assert.equal(escalated.level, 2, '第二次催升到第 2 档（文案要变硬）')
-  ok(`没产出 → 每 ${NUDGE_ESCALATE_EVERY} 次升级重催`)
-
-  // 档位有上限，但**仍然继续催**（沉默比重复更贵）。
-  resetNudge()
-  for (let i = 0; i < NUDGE_READ_STREAK; i += 1) noteCall('s4', 'read', { file_path: `/k${i}.txt` })
-  let maxLevel = 1
-  let refires = 0
-  for (let i = 0; i < NUDGE_ESCALATE_EVERY * NUDGE_MAX_LEVEL + NUDGE_ESCALATE_EVERY * 2; i += 1) {
-    const step = noteCall('s4', 'read', { file_path: `/k-more-${i}.txt` })
-    if (step.shouldNudge) { refires += 1; maxLevel = Math.max(maxLevel, step.level) }
-  }
-  assert.equal(maxLevel, NUDGE_MAX_LEVEL, `档位封顶 ${NUDGE_MAX_LEVEL}（不许无限加码）`)
-  assert.ok(refires >= 1, '到顶之后仍然继续催——不许退回「催过就永久沉默」')
-  ok(`档位封顶 ${NUDGE_MAX_LEVEL}，且到顶后仍持续催`)
+  assert.notEqual(cadenceAfterRepeat, null, `分段读不许顶掉节拍——第 ${NUDGE_EVERY} 步仍要按节拍催`)
+  assert.equal(cadenceAfterRepeat.count, NUDGE_EVERY, '节拍落在正确的步数上')
+  ok('分段读不消费节拍（两条触发各管各的）')
 
   // 会话之间互不串味（本 hook 注册在根级 ctx，对每个 agent 都生效）。
   resetNudge()
-  for (let i = 0; i < NUDGE_READ_STREAK; i += 1) noteCall('sA', 'read', { file_path: `/m${i}.txt` })
-  const other = noteCall('sB', 'read', { file_path: '/m0.txt' })
-  assert.equal(other.streak, 1, '会话之间互不串味')
-  assert.equal(other.shouldNudge, false, '别的会话第一次不催')
-  ok('催促状态按会话隔离')
+  for (let i = 0; i < NUDGE_EVERY; i += 1) noteCall('sA', 'read', { file_path: `/n${i}.txt` })
+  const other = noteCall('sB', 'read', { file_path: '/n0.txt' })
+  assert.equal(other.count, 1, '会话之间互不串味')
+  assert.equal(other.shouldNudge, false, '别的会话第一步不催')
+  ok('催促计数按会话隔离')
 
-  // 空 sessionId 安全降级：不崩、不落表。
+  // 空 sessionId / 空工具名安全降级：不崩、不落表。
   resetNudge()
-  const anonymous = noteCall('', 'read', { file_path: '/a.txt' })
-  assert.equal(anonymous.shouldNudge, false, '没有 sessionId 时不催')
+  assert.equal(noteCall('', 'read', { file_path: '/a.txt' }).shouldNudge, false, '没有 sessionId 时不催')
   assert.equal(nudgeStateOf(''), null, '空 sessionId 不落表')
-  ok('空 sessionId 安全降级')
+  assert.equal(noteCall('s8', '', {}).shouldNudge, false, '没有工具名时不计数')
+  ok('空 sessionId / 空工具名安全降级')
 
   // clearNudge 要能真的清掉（测试与「用户重新说话」都靠它）。
   resetNudge()
-  noteCall('s5', 'read', { file_path: '/x.txt' })
-  assert.notEqual(nudgeStateOf('s5'), null, '记过之后有状态')
-  clearNudge('s5')
-  assert.equal(nudgeStateOf('s5'), null, 'clearNudge 之后状态没了')
+  noteCall('s9', 'read', { file_path: '/x.txt' })
+  assert.notEqual(nudgeStateOf('s9'), null, '记过之后有状态')
+  clearNudge('s9')
+  assert.equal(nudgeStateOf('s9'), null, 'clearNudge 之后状态没了')
   ok('clearNudge 清得掉状态')
+
+  /* ---------------- 纯函数层：工具名单与目标 ---------------- */
+
+  assert.deepEqual([...READ_ONLY_TOOLS], ['read', 'grep', 'glob'], '只读名单只含三个探查工具')
+  assert.equal(isReadOnlyTool('write'), false, 'write 不是只读')
+  assert.equal(readTargetOf('read', { file_path: '/a/b.txt' }), '/a/b.txt', 'read 的目标是 file_path')
+  assert.equal(readTargetOf('grep', { path: '/a' }), '', 'grep 不是「同一个文件」')
+  ok('只读名单与 read 目标判定')
 
   /* ---------------- 提示文本 ---------------- */
 
-  const streakText = nudgeText(NUDGE_REASON_STREAK, NUDGE_READ_STREAK, 1)
-  assert.ok(streakText.includes(NUDGE_MARK), '催促带标记，便于辨认来源')
-  assert.ok(streakText.includes(String(NUDGE_READ_STREAK)), '催促里写明连续几次')
-  // 催促必须给出口：只骂「你太慢了」等于没给信息。
-  assert.ok(streakText.includes('产出'), '第一档必须要求「先产出一步」')
-  ok('催促第一档：写明次数 + 给出产出动作')
+  const cadenceText = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY, 1)
+  assert.ok(cadenceText.includes(NUDGE_MARK), '催促带标记，便于辨认来源')
+  assert.ok(cadenceText.includes(String(NUDGE_EVERY)), '第 1 档要写明走了多少步')
+  assert.ok(cadenceText.includes('报进度'), '第 1 档要的是「报进度 + 做下一步」，不是训斥')
+  assert.ok(!cadenceText.includes('不许再调'), '第 1 档不该禁工具（有产出时只是轻推）')
+  ok('第 1 档：报进度 + 做下一步（轻推）')
 
-  const repeatText = nudgeText(NUDGE_REASON_REPEAT, NUDGE_READ_STREAK, 0, '/same.txt')
+  const repeatText = nudgeText(NUDGE_REASON_REPEAT, NUDGE_EVERY, 0, '/same.txt')
   assert.ok(repeatText.includes('/same.txt'), '分段读的催促要点名是哪个文件')
   assert.ok(repeatText.includes('limit'), '分段读的催促要教它把 limit 给足')
   assert.ok(repeatText.includes('并行'), '分段读的催促要教它并行读多个文件')
   ok('分段读催促：点名文件 + 教「一次读全 / 并行读」')
 
-  const hardText = nudgeText(NUDGE_REASON_STREAK, NUDGE_READ_STREAK + NUDGE_ESCALATE_EVERY, 2)
-  assert.ok(hardText.includes('不许再调'), '第二档必须禁掉只读工具（撤出口）')
-  ok('催促第二档：禁掉只读工具')
-
-  const hardest = nudgeText(NUDGE_REASON_STREAK, NUDGE_READ_STREAK + NUDGE_ESCALATE_EVERY * 2, NUDGE_MAX_LEVEL)
+  const hardText = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY * 2, 2)
+  assert.ok(hardText.includes('不许再调'), '第 2 档必须禁掉只读工具（撤出口）')
+  const hardest = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY * 3, NUDGE_MAX_LEVEL)
   assert.ok(hardest.includes('立刻交付'), '最高档必须要求立刻交付')
-  ok(`催促最高档（${NUDGE_MAX_LEVEL} 档）要求立刻交付`)
+  ok(`第 2 档禁只读、第 ${NUDGE_MAX_LEVEL} 档要求立刻交付`)
 
   /* ---------------- 接线层：真钩子驱动 ---------------- */
 
@@ -244,19 +256,20 @@ try {
     resetNudge()
     clearNudge(sessionId)
     let injected = []
-    for (let i = 0; i < NUDGE_READ_STREAK; i += 1) {
-      injected = await fire(listener, call('read', { file_path: `/w${i}.txt` }, sessionId))
+    // 用**读写混合**驱动：这正是用户要的口径，也能把「只读才算」的旧实现筛掉。
+    for (let i = 0; i < NUDGE_EVERY; i += 1) {
+      injected = await fire(listener, call(i % 2 === 0 ? 'read' : 'write', { file_path: `/w${i}.txt` }, sessionId))
     }
     if (injected.some((one) => one.includes(NUDGE_MARK))) { nudgeListener = listener; break }
   }
-  assert.notEqual(nudgeListener, null, '必须有一个钩子在连续只读时注入催促')
-  ok('接线：连续只读调用后真的注入了催促')
+  assert.notEqual(nudgeListener, null, `读写混合走到第 ${NUDGE_EVERY} 步必须注入催促`)
+  ok('接线：读写混合走到节拍真的注入了催促')
 
-  // 接线层回归：不产出时必须持续催（只催一次 = 用户还得手工推）。
+  // 接线层回归：不产出时钩子必须**持续**按节拍催，且第二次起变硬。
   resetNudge()
   clearNudge(sessionId)
   const pushed = []
-  for (let i = 0; i < NUDGE_READ_STREAK + NUDGE_ESCALATE_EVERY + 2; i += 1) {
+  for (let i = 1; i <= NUDGE_EVERY * 3; i += 1) {
     const decision = await nudgeListener(call('read', { file_path: `/w-more-${i}.txt` }, sessionId), { ok: true }, accept)
     const contexts = decision !== null && Array.isArray(decision.additionalContexts) ? decision.additionalContexts : []
     for (const message of contexts) {
@@ -264,9 +277,9 @@ try {
       if (Array.isArray(content)) pushed.push(content.map((b) => (b !== null && typeof b.text === 'string' ? b.text : '')).join(''))
     }
   }
-  assert.ok(pushed.length >= 2, '不产出时钩子必须重复催（只催一次 = 催促失效）')
+  assert.equal(pushed.length, NUDGE_MAX_LEVEL, `一直只读时每个节拍各催一次（共 ${NUDGE_MAX_LEVEL} 次）`)
   assert.ok(pushed.some((one) => one.includes('不许再调')), '第二次催必须是硬文案（禁掉只读工具）')
-  ok('接线：不产出时持续升级催促，第二次起禁掉只读工具')
+  ok(`接线：一直只读时每个节拍都催（${NUDGE_MAX_LEVEL} 次），第二次起禁只读`)
 
   // 接线层：分段读在真实钩子上也要触发，且带文件名。
   resetNudge()
@@ -279,37 +292,23 @@ try {
   assert.ok(repeatInjected.some((one) => one.includes('/repeat-me.txt')), '催促里要点名那个文件')
   ok('接线：分段读触发且点名文件')
 
-  // 守卫自证：产出动作**一条都不许**被催（否则催促会打断正在干活的人）。
+  // 守卫自证：**未到节拍**不许催（否则每步都催，催促会变成噪音源）。
   resetNudge()
   clearNudge(sessionId)
-  let producedInjected = 0
-  for (let i = 0; i < NUDGE_READ_STREAK + 3; i += 1) {
-    const decision = await nudgeListener(call('write', { file_path: `/out${i}.txt` }, sessionId), { ok: true }, accept)
+  let earlyInjected = 0
+  for (let i = 1; i < NUDGE_EVERY; i += 1) {
+    const decision = await nudgeListener(call('read', { file_path: `/early${i}.txt` }, sessionId), { ok: true }, accept)
     const contexts = decision !== null && Array.isArray(decision.additionalContexts) ? decision.additionalContexts : []
-    producedInjected += contexts.length
+    earlyInjected += contexts.length
   }
-  assert.equal(producedInjected, 0, '一直产出时一条催促都不许注入')
-  ok('守卫自证：持续产出时不被催')
-
-  // 守卫自证：只读与产出交替（正常干活的节奏）不许被催。
-  resetNudge()
-  clearNudge(sessionId)
-  let mixedInjected = 0
-  for (let i = 0; i < NUDGE_READ_STREAK + 3; i += 1) {
-    const decision = await nudgeListener(call('read', { file_path: `/mix${i}.txt` }, sessionId), { ok: true }, accept)
-    const contexts = decision !== null && Array.isArray(decision.additionalContexts) ? decision.additionalContexts : []
-    mixedInjected += contexts.length
-    // 每读一次就跟一次产出——这是健康的节奏，连击应当始终归零。
-    await nudgeListener(call('edit', { file_path: `/mix${i}.txt` }, sessionId), { ok: true }, accept)
-  }
-  assert.equal(mixedInjected, 0, '读一次改一次（正常节奏）不该被催')
-  ok('守卫自证：读一次改一次不被催')
+  assert.equal(earlyInjected, 0, `未到 ${NUDGE_EVERY} 的倍数时一步都不许催`)
+  ok(`守卫自证：未到节拍（前 ${NUDGE_EVERY - 1} 步）不被催`)
 
   // 守卫自证：工具失败（block）时不插话——失败重试是正当行为，不是磨蹭。
   resetNudge()
   clearNudge(sessionId)
   let blockedInjected = 0
-  for (let i = 0; i < NUDGE_READ_STREAK + 2; i += 1) {
+  for (let i = 0; i < NUDGE_EVERY + 2; i += 1) {
     const decision = await nudgeListener(call('read', { file_path: `/bad${i}.txt` }, sessionId), { ok: false }, async () => ({ kind: 'block' }))
     const contexts = decision !== null && Array.isArray(decision.additionalContexts) ? decision.additionalContexts : []
     blockedInjected += contexts.length
@@ -317,7 +316,7 @@ try {
   assert.equal(blockedInjected, 0, '工具失败（block）时不催')
   ok('守卫自证：工具失败时不插话')
 
-  console.log(`\n催促（只看不动）： ${passed} 通过 / 0 失败`)
+  console.log(`\n催促（每 ${NUDGE_EVERY} 步一次）： ${passed} 通过 / 0 失败`)
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
