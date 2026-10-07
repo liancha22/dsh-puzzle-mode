@@ -3,3 +3,7 @@ node_modules/
 *.zip
 *.log
 .DS_Store
+
+# 临时提交信息 / 中间产物：`git add -A` 会把它们一起提交（v0.28.1 踩过）。
+.git-commit-msg.tmp
+.release-id.tmp
