@@ -6,7 +6,7 @@
  * ## 为什么要有这一组
  *
  * 用户原话：「干活都磨磨唧唧的，加一个自动注入语音犀利的催促的功能」，
- * 随后把口径钉死成**「我的意思是干什么都四步催一次」**——
+ * 随后把口径钉死成**「我的意思是干什么都四步催一次」**（该值后来由用户改为 6 步）——
  * 是**纯节拍**，不是「连续只读才催」。第一版做成了后者，被当场纠正。
  * 所以这里最关键的一条断言是：**读写混合的 4 步也必须催**。
  *
@@ -102,13 +102,14 @@ async function fire(listener, exec) {
 try {
   /* ---------------- 纯函数层：节拍 ---------------- */
 
-  assert.equal(NUDGE_EVERY, 4, `用户裁定「干什么都四步催一次」，节拍必须是 4（当前 ${NUDGE_EVERY}）`)
+  assert.equal(NUDGE_EVERY, 6, `用户裁定节拍为 6 步（当前 ${NUDGE_EVERY}）`)
   ok(`节拍 = ${NUDGE_EVERY} 步（用户裁定值）`)
 
-  // **核心断言**：纯节拍——读写混合也必须在第 4 步催。
+  // **核心断言**：纯节拍——读写混合也必须按节拍催。
   // 第一版是「连续只读才催」，这一条就是防它退回去的守卫。
+  // 工具名刻意**交错**，覆盖「读 / 写 / 跑命令」都在同一节拍里。
   resetNudge()
-  const mixed = ['read', 'write', 'pwsh', 'read']
+  const mixed = Array.from({ length: NUDGE_EVERY }, (_, i) => ['read', 'write', 'pwsh'][i % 3])
   let cadenceHit = null
   for (let i = 0; i < mixed.length; i += 1) {
     const step = noteCall('s1', mixed[i], { file_path: `/m${i}.txt` })
