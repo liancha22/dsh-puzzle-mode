@@ -1076,7 +1076,54 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
     if (body.method === 'state') result = thState
     else if (body.method === 'list') result = { ok: true, projects: [{ name: 'demo', health: 77 }] }
     else if (body.method === 'theme') result = { ok: true, themes: [], tried: [] }
-    else result = { ok: true }
+    /**
+     * ⚠️ **`update` 必须回真实数据**，不能落进最后那条 `{ ok: true }`。
+     *
+     * 这里踩过一个真事故（用户报「打开更新面板就消失」）：更新页的渲染代码里
+     * 用了 `sessionId`，而 `updatePage` 里没有这个变量 → `ReferenceError` →
+     * React 整棵子树卸载 → 面板一打开就没了。
+     *
+     * 而**测试当时全绿**，因为 `thFetch` 对 `update` 回的是 `{ok:true}`（没有 result），
+     * 更新页只渲染「点右上角重新检查」那一行，**根本没走到会崩的分支**。
+     * 所以这里把三条 action 的真实形状都造出来：有数据、有摘要、有安装结果。
+     */
+    else if (body.method === 'update' && body.action === 'check') {
+      result = {
+        ok: true, current: '1.0.0', latest: '1.0.2', tag: 'v1.0.2', state: 'newer', hasUpdate: true,
+        notes: '正文', notesSource: 'release', anchorSha256: '', htmlUrl: 'https://x', publishedAt: '',
+        prerelease: false, tarball: { name: 'dsh-puzzle-mode-1.0.2.tgz', url: 'https://x/a.tgz', size: 551047, sha256: '' },
+        assets: [], channel: 'api', tried: [], versionSource: 'profile', profile: '/tmp/profile',
+        install: { command: 'pnpm add x', profile: '/tmp/profile' },
+      }
+    } else if (body.method === 'update' && body.action === 'releases') {
+      result = {
+        ok: true, count: 2, channel: 'api', tried: [],
+        releases: [
+          {
+            tag: 'v1.0.2', version: '1.0.2', name: '修「本机版本读错来源」', summary: ['第一行摘要', '第二行摘要', '第三行摘要'],
+            summaryTotal: 12, summaryRest: 9, summaryTruncated: true, body: '', publishedAt: '2026-10-08T00:00:00Z',
+            htmlUrl: 'https://x/1', prerelease: false, anchorSha256: '', current: false,
+          },
+          {
+            tag: 'v1.0.0', version: '1.0.0', name: '自动更新', summary: ['旧的一行'],
+            summaryTotal: 1, summaryRest: 0, summaryTruncated: false, body: '', publishedAt: '2026-10-07T00:00:00Z',
+            htmlUrl: 'https://x/0', prerelease: false, anchorSha256: '', current: true,
+          },
+        ],
+      }
+    } else if (body.method === 'update' && body.action === 'staged') {
+      // 带 `lastRun`（一次成功安装）与备份清单——这些都是会走渲染的分支。
+      result = {
+        current: '1.0.2', dir: '/tmp/updates', staged: [],
+        profile: '/tmp/profile', install: { command: 'pnpm add x', profile: '/tmp/profile' },
+        lastRun: {
+          ok: true, stage: 'done', running: false, pid: 0, phase: '', error: '', rolledBack: false,
+          rollback: null, checks: [], beforeVersion: '1.0.0', afterVersion: '1.0.2',
+          startedAt: '', finishedAt: '', backupDir: '/tmp/backup', hint: '',
+        },
+        backups: [{ name: 'backup-1', dir: '/tmp/backup', at: '2026-10-08T15:00:00Z', fromVersion: '1.0.0', toTag: 'v1.0.2' }],
+      }
+    } else result = { ok: true }
     return Promise.resolve({ json: () => Promise.resolve({ ok: true, result }) })
   }
   new Function('window', 'document', 'fetch', source)(
@@ -1151,13 +1198,54 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
     && node.props.title !== undefined && String(node.props.title).indexOf('检查更新') === 0)[0]
   assert.ok(updateIcon !== undefined, '面板一角要能找到更新入口按钮')
   updateIcon.props.onClick()
+  /**
+   * ⚠️ **必须 `await flush()`**：点开更新页会同时发三个异步请求
+   * （`check` / `releases` / `staged`），不等它们回来就读树，看到的是**初始空态**——
+   * 那正好把要验的分支全绕过去了（第一版就是这么写的，断言假红）。
+   */
+  await flush()
   thTree = thPanel.component({})
   assert.equal(countClass(thTree, 'dshpz-panel'), 1,
     '更新页也是主视图：整棵树仍只有一层 .dshpz-panel（多一层＝又叠回去了）')
   assert.ok(findAll(thTree, (node) => node === '更新').length >= 1, '切过去要真的是更新页')
-  // 更新页必须说清「不会自动装进 profile」——这是用户裁定里最容易被误解的一点。
+
+  /**
+   * ⚠️ **这一段是给一个真事故补的回归守卫**（用户报「打开更新面板就消失」）。
+   *
+   * 当时更新页的渲染代码里用了 `sessionId`，而 `updatePage` 里没有这个变量 →
+   * `ReferenceError` → React 整棵子树卸载 → 面板一打开就没了。
+   * 而测试**全绿**，因为夹具对 `update` 回的是空 result，那条会崩的分支根本没走到。
+   *
+   * 所以这里的两条判据是**两头**的：
+   *   ① 有数据时必须真的渲染出内容（版本号、摘要、安装结果都出现）；
+   *   ② 渲染过程**不许抛异常**（抛了下面这行就直接红，而不是等到用户报「面板消失」）。
+   */
+  // 头部副标题是**拼接**出来的（`'当前 v' + current + ' · 线上 v' + latest + …`），
+  // 所以判据用「包含」而不是「以它开头」——写死开头会假红。
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('当前 v1.0.0') >= 0 && node.indexOf('线上 v1.0.2') >= 0).length >= 1,
+    '有检查结果时头部要显示「当前 v1.0.0 · 线上 v1.0.2」（渲染崩了这里就找不到）')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('发现新版本') >= 0).length >= 1,
+    '有新版本时要显示「发现新版本 v…」')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('一键更新到') >= 0).length >= 1,
+    '要有「一键更新到 v…」按钮（v1.0.1 起是一键更新）')
+  // 各版本更新日志：每版最多 3 行摘要 + 当前标记 + 截断说明。
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('各版本更新日志') >= 0).length >= 1,
+    '要有「各版本更新日志」区块（用户需求：有个地方看各个版本）')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node === 'v1.0.2').length >= 1,
+    '版本列表要渲染出版本号')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node === '第一行摘要').length >= 1,
+    '摘要行要真的渲染出来')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('…还有') === 0).length >= 1,
+    '被截断的版本要明说「…还有 N 行」')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node === '当前').length >= 1,
+    '当前装的那版要打「当前」标记')
+  // 安装结果与备份：这两个分支同样只在有数据时才走得到。
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('已装好 v1.0.2') >= 0).length >= 1,
+    '有安装结果时要显示结论（这些分支以前从没被渲染过）')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('备份与暂存') >= 0).length >= 1,
+    '有备份时要显示「备份与暂存」区块')
   assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('不会') >= 0 && node.indexOf('profile') >= 0).length >= 1,
-    '更新页要写明「不会自动装进 profile」（用户看到按钮不叫「更新」时会想知道原因）')
+    '更新页要写明「不会自动装进 profile」的口径变化')
 
   /**
    * **互斥**：从更新页点主题图标 → 更新页必须让位。

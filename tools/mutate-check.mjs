@@ -170,6 +170,16 @@ const MUTATIONS = [
     from: 'function restoreOne(from, to) {\n  if (!existsSync(from)) return { ok: true, skipped: true }',
     to: 'function restoreOne(from, to) {\n  if (true) return { ok: true, skipped: true }\n  if (!existsSync(from)) return { ok: true, skipped: true }',
   },
+  {
+    label: '更新页用了不存在的变量（面板一打开就消失）',
+    file: 'lib/client.js',
+    test: 'test/20-client.test.mjs',
+    // 这是**用户真机报过的 bug**：`updatePage` 里用了 `sessionId`，而它没有这个变量 →
+    // ReferenceError → React 整棵子树卸载 → 面板一打开就没了。
+    // 当时测试全绿，因为夹具对 `update` 回的是空 result，那条会崩的分支根本没走到。
+    from: '        body.push(releaseList(view))',
+    to: '        body.push(releaseList(view, sessionId))',
+  },
 ]
 
 let failed = 0

@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v1.0.2** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v1.0.3** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.0.2
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.0.3
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-1.0.2.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.0.2/dsh-puzzle-mode-1.0.2.tgz)
+[dsh-puzzle-mode-1.0.3.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.0.3/dsh-puzzle-mode-1.0.3.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -58,6 +58,25 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 
 ## 最新版本
 
+### v1.0.3 · 修「打开更新面板就消失」
+
+用户报的**真机崩溃**：打开更新页，整个面板不见了。
+
+**根因**：更新页的渲染代码里用了 `sessionId`，而 `updatePage()` 里**没有这个变量**
+（更新是全局功能，本来就不需要会话）→ `ReferenceError` → React 整棵子树卸载。
+
+**为什么测试当时全绿**（这条比 bug 本身更重要）：`20-client` 的更新页断言确实存在，
+但夹具对 `method:'update'` 回的是 `{ ok: true }`（**没有 result**）——更新页只渲染
+「点右上角重新检查」那一行，**那条会崩的分支根本没走到**。一个从没被执行的渲染路径，等于没测。
+
+**修法三处**：① 夹具回**真实数据**（`check` / `releases` / `staged` 三条 action 的真实形状）；
+② 点开之后 **`await flush()`**（点开会同时发三个异步请求，不等就读树看到的是空态）；
+③ 断言「**有数据时必须渲染出内容**」（版本号 / 3 行摘要 / 「…还有 N 行」/「当前」标记 /
+安装结论 / 备份区块逐条验）。
+
+**变异验证**：把 `sessionId` 那个 bug 改回去 → 测试**立刻红**
+（`ReferenceError: sessionId is not defined`，栈顶直指 `updatePage`）；还原 → 绿。
+这条变异已加进 `mutate-check`（20 → 21 项）。
 ### v1.0.2 · 修「本机版本读错来源」（假报「已是最新」）
 
 v1.0.1 发完当场实测发现的**真缺陷**——它不报错，只是**安静地说错话**：
@@ -138,14 +157,8 @@ v1.0.1 发完当场实测发现的**真缺陷**——它不报错，只是**安�
 `npm test` 全绿：60 + 47 + 7 + 51 + 17 + 36 + 12 + 9 + 21 + 23 + 21 + 31 + 22 + 12；
 跨插件握手 18 / 0。
 
-### v1.0.0 · 自动更新 / 主题开发分享 / 工作流去重 / 液态玻璃
 
-用户一次点了五件事：**自动更新**（面板一角检测线上版本，拉更新日志讲清改了什么，
-把新版下到暂存区校验后给你一条安装命令）、**更新日志**、**主题开发 + 上传**
-（一键建脚手架 + 把开发提示词填进输入框；一键推送到主题仓库，让别人也能用）、
-**新拟物主题 + 默认皮肤正名为液态玻璃**、**工作流注入去重**（命中集合没变就不重复注入）。
-
-> 更早的版本（v0.30.0 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
+> 更早的版本（v1.0.0 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 功能
 
