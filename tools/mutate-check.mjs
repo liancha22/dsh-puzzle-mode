@@ -109,6 +109,67 @@ const MUTATIONS = [
     from: '    if (existsSync(file)) {\n      skipped.push(file)\n      continue\n    }',
     to: '    if (false) {\n      skipped.push(file)\n      continue\n    }',
   },
+  {
+    label: '摘要不限行（退回「一大堆字」）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '  const head = lines.slice(0, limit)',
+    to: '  const head = lines.slice(0, lines.length)',
+  },
+  {
+    label: '摘要丢掉表格行（漏掉「改了什么」）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '    if (clean.startsWith(\'|\')) {',
+    to: '    if (clean.startsWith(\'|\')) continue\n    if (false) {',
+  },
+  {
+    label: '更新器脚本暂存到 node_modules（装坏就没得救）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '  return join(updatesDir(), UPDATER_SCRIPT)',
+    to: '  return join(updatesDir(), \'node_modules\', UPDATER_SCRIPT)',
+  },
+  {
+    label: 'Release 列表不剔草稿（把未发布的当成版本）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '    if (raw.draft === true) continue',
+    to: '    if (false) continue',
+  },
+  {
+    label: 'Release 列表不标当前版（用户得自己找）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '      current: current !== \'\' && version === current,',
+    to: '      current: false,',
+  },
+  {
+    label: '安装器不先报「我在跑」（面板分不清在装还是没起来）',
+    file: 'tools/dsh-puzzle-update.mjs',
+    test: 'test/150-installer.test.mjs',
+    // ⚠️ 要改的是**函数体**，不是某一个调用点：`writeRunning` 有两处调用
+    // （备份前 + 安装前），只改一处另一处仍然会写出 `running: true`，
+    // 守卫还在、测试自然不红——第一版就是这么写的，白跑一轮。
+    from: "function writeRunning(path, payload) {\n  writeResult(path, {\n    ok: false, stage: 'running', running: true, startedAt: new Date().toISOString(),\n    pid: process.pid, ...payload,\n  })\n}",
+    to: 'function writeRunning(path, payload) {\n  void path\n  void payload\n}',
+  },
+  {
+    label: '安装器不验入口文件（语法坏了也算装好）',
+    file: 'tools/dsh-puzzle-update.mjs',
+    test: 'test/150-installer.test.mjs',
+    from: '  const checked = run(process.execPath, [\'--check\', entry], { timeout: 30000 })',
+    to: '  const checked = { ok: true, stderr: \'\', error: \'\' }',
+  },
+  {
+    label: '安装器失败不回退（用户拿到半坏的插件）',
+    file: 'tools/dsh-puzzle-update.mjs',
+    test: 'test/150-installer.test.mjs',
+    // 同样要改**函数体**：`rollback` 被两个失败路径调用（pnpm 失败 / 自检失败），
+    // 只改一处的话另一处仍会回退。改 `restoreOne` 更彻底——回退会「假装成功」。
+    from: 'function restoreOne(from, to) {\n  if (!existsSync(from)) return { ok: true, skipped: true }',
+    to: 'function restoreOne(from, to) {\n  if (true) return { ok: true, skipped: true }\n  if (!existsSync(from)) return { ok: true, skipped: true }',
+  },
 ]
 
 let failed = 0

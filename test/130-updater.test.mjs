@@ -47,6 +47,16 @@ import {
   sha256FromNotes,
   sha256OfBytes,
   stagedTarballPath,
+  RELEASE_SUMMARY_LINES,
+  summarizeNotes,
+  releaseListOf,
+  releaseListOf as _releaseListOf,
+  updaterArgsOf,
+  stageUpdaterScript,
+  updaterScriptPath,
+  listBackups,
+  readUpdateRun,
+  UPDATER_SCRIPT,
 } from '../lib/puzzle.js'
 
 const root = mkdtempSync(join(tmpdir(), 'puzzle-updater-'))
@@ -432,7 +442,114 @@ try {
     await new Promise((resolvePromise) => server.close(resolvePromise))
   }
 
-  console.log(`\n自动更新： ${passed} 通过 / 0 失败`)
-} finally {
+  /* ---------------- 各版本更新日志（v1.0.1：洁简，每版最多 3 行） ---------------- */
+
+  assert.equal(RELEASE_SUMMARY_LINES, 3, `用户裁定每版最多 ${RELEASE_SUMMARY_LINES} 行摘要`)
+  ok(`每版摘要上限 = ${RELEASE_SUMMARY_LINES} 行（用户裁定）`)
+
+  // **核心**：摘要必须真的短——这是「不要一大堆字」那条需求的判据。
+  const longBody = [
+    '# v1.0.0 · 很长的标题',
+    '',
+    '**粗体**说明第一句。',
+    '',
+    '- 列表项一',
+    '- 列表项二',
+    '- 列表项三',
+    '- 列表项四',
+    '- 列表项五',
+    '',
+    '| 项 | 值 |',
+    '| --- | --- |',
+    '| a | 1 |',
+    '',
+    '![图](x.png)',
+    '',
+    '---',
+    '',
+    '结尾一段话',
+  ].join('\n')
+  const sum = summarizeNotes(longBody)
+  assert.equal(sum.lines.length, RELEASE_SUMMARY_LINES, `摘要必须正好 ${RELEASE_SUMMARY_LINES} 行`)
+  assert.equal(sum.truncated, true, '被截断时要标出来')
+  assert.ok(sum.rest > 0, '要能说出还剩几行（静默截断会让人以为这版就这么点内容）')
+  ok(`长正文被压成 ${RELEASE_SUMMARY_LINES} 行 + 「还有 ${sum.rest} 行」`)
+
+  // 逐条判据：标题、空行、图片、分隔线都该丢掉；列表符号与粗体要规范化。
+  const joined = sum.lines.join('\n')
+  assert.ok(!joined.includes('#'), '标题行要丢掉（列表里已有版本号与标题，重复占地方）')
+  assert.ok(!joined.includes('!['), '图片行要丢掉（纯文本摘要里是乱码）')
+  assert.ok(!joined.includes('---'), '分隔线要丢掉（只是排版）')
+  assert.ok(joined.includes('粗体说明第一句'), '**粗体** 记号要去掉但文字要留')
+  assert.ok(!joined.includes('**'), 'markdown 粗体记号要剥掉')
+  assert.ok(joined.includes('· 列表项一'), '列表符号统一成 ·')
+  ok('摘要规则：丢标题/图片/分隔线，剥粗体记号，列表符号统一')
+
+  // 短正文不该被标成截断。
+  const shortSum = summarizeNotes('就一句话。')
+  assert.equal(shortSum.truncated, false, '短正文不算截断')
+  assert.equal(shortSum.lines.length, 1, '短正文一行')
+  assert.equal(summarizeNotes('').lines.length, 0, '空正文安全')
+  assert.equal(summarizeNotes(null).lines.length, 0, '非字符串安全')
+  ok('短正文不标截断 / 空值安全')
+
+  // 表格行要压平保留：发版正文的关键信息常在表里，整行丢掉会漏掉「改了什么」。
+  const tableSum = summarizeNotes('| 通道 | 结果 |\n| --- | --- |\n| API | 通 |')
+  assert.ok(tableSum.lines.some((one) => one.includes('通道') && one.includes('结果')), '表格表头要压平保留')
+  assert.ok(tableSum.lines.some((one) => one.includes('API') && one.includes('通')), '表格数据行要压平保留')
+  assert.ok(!tableSum.lines.some((one) => one.includes('---')), '表格分隔行要丢掉')
+  ok('表格行压平保留（关键信息常在表里）')
+
+  /* ---------------- Release 列表解析 ---------------- */
+
+  const listJson = [
+    { tag_name: 'v1.0.0', name: 'v1.0.0 · 新', body: '第一行\n第二行\n第三行\n第四行', published_at: '2026-10-08T00:00:00Z', html_url: 'https://x/1', prerelease: false, draft: false },
+    { tag_name: 'v0.9.0', name: 'v0.9.0 · 旧', body: '旧的一行', published_at: '2026-09-01T00:00:00Z', html_url: 'https://x/09', prerelease: false, draft: false },
+    { tag_name: 'v9.9.9', name: '草稿', body: 'x', draft: true },
+    { name: '缺 tag', body: 'y' },
+  ]
+  const parsedList = releaseListOf(listJson, { current: '0.9.0' })
+  assert.equal(parsedList.ok, true, '列表要认')
+  assert.equal(parsedList.releases.length, 2, '草稿与缺 tag 的要剔掉')
+  // 排序：新的在前（用户看日志是从新往旧看）。
+  assert.equal(parsedList.releases[0].version, '1.0.0', '最新的排最前')
+  assert.equal(parsedList.releases[1].version, '0.9.0', '旧版在后')
+  // 「当前装的那版」要标出来——没有这个标记，用户得自己找。
+  assert.equal(parsedList.releases[0].current, false, '不是当前装的那版')
+  assert.equal(parsedList.releases[1].current, true, '当前装的那版要标记出来')
+  assert.equal(parsedList.releases[0].summary.length, RELEASE_SUMMARY_LINES, '每版都带摘要')
+  assert.equal(parsedList.releases[0].summaryTruncated, true, '四行正文压成三行 → 标截断')
+  ok('Release 列表：剔草稿/缺字段、按版本倒序、标出当前版、每版带摘要')
+
+  assert.equal(releaseListOf(null).ok, false, '非数组要明确失败')
+  assert.equal(releaseListOf([]).releases.length, 0, '空列表安全')
+  ok('Release 列表的坏输入明确失败 / 空列表安全')
+
+  /* ---------------- 安装器：参数与暂存（v1.0.1） ---------------- */
+
+  const args = updaterArgsOf({ profile: 'P', tag: 'v2.0.0', version: '2.0.0' })
+  for (const flag of ['--profile', '--tag', '--expect-version', '--result']) {
+    assert.ok(args.includes(flag), `安装器参数要带 ${flag}`)
+  }
+  assert.equal(args[args.indexOf('--tag') + 1], 'v2.0.0', 'tag 要传对')
+  assert.equal(args[args.indexOf('--expect-version') + 1], '2.0.0', '期望版本要传对（自检用它比对）')
+  ok('安装器参数拼装（profile / tag / 期望版本 / 结果路径）')
+
+  // **核心设计**：脚本要先被复制到 $DSH_HOME 下再跑——它要替换插件自己的文件，
+  // 住在插件里就会出现「装坏了脚本也没了」的死局。
+  const stagedScript = stageUpdaterScript()
+  assert.equal(stagedScript.ok, true, `更新器脚本要能被暂存：${stagedScript.ok === true ? '' : stagedScript.error}`)
+  assert.equal(stagedScript.path, updaterScriptPath(), '暂存路径是 $DSH_HOME 下的固定位置')
+  assert.ok(stagedScript.path.includes('puzzle-mode-updates'), '暂存位置在更新目录里（不属于任何包）')
+  assert.ok(!stagedScript.path.includes('node_modules'), '**绝不能**放在 node_modules 里——那正是会被装坏的地方')
+  assert.equal(existsSync(stagedScript.path), true, '脚本真的落到盘上了')
+  assert.equal(UPDATER_SCRIPT, 'dsh-puzzle-update.mjs', '脚本文件名')
+  ok('更新器脚本被暂存到 $DSH_HOME（不在 node_modules 里，装坏了也还在）')
+
+  // 读「上一次运行」：没有结果时返回 null（面板据此显示「还没装过」而不是报错）。
+  assert.equal(readUpdateRun(), null, '没有结果文件时返回 null（不抛错）')
+  assert.ok(Array.isArray(listBackups()), '备份清单要能列出来（没有就是空数组）')
+
+  console.log(`\n自动更新： ${passed} 通过 / 0 失败`)} finally {
   rmSync(root, { recursive: true, force: true })
 }
