@@ -1144,5 +1144,85 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
     && node.props !== undefined && typeof node.props.className === 'string'
     && node.props.className.split(/\s+/).includes('dshpz-body')).length >= 1, '点返回要真的回到三栏主界面')
   console.log('ok   主题页：直接切换主界面（全树只有一层 .dshpz-panel），返回回到项目面板')
+
+  /* ③ 更新页（v1.0.0）：入口 / 主视图切换 / 与主题页互斥。 */
+  const updateIcon = findAll(thTree, (node) => typeof node === 'object' && node.type === 'button'
+    && node.props !== undefined && typeof node.props.onClick === 'function'
+    && node.props.title !== undefined && String(node.props.title).indexOf('检查更新') === 0)[0]
+  assert.ok(updateIcon !== undefined, '面板一角要能找到更新入口按钮')
+  updateIcon.props.onClick()
+  thTree = thPanel.component({})
+  assert.equal(countClass(thTree, 'dshpz-panel'), 1,
+    '更新页也是主视图：整棵树仍只有一层 .dshpz-panel（多一层＝又叠回去了）')
+  assert.ok(findAll(thTree, (node) => node === '更新').length >= 1, '切过去要真的是更新页')
+  // 更新页必须说清「不会自动装进 profile」——这是用户裁定里最容易被误解的一点。
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('不会') >= 0 && node.indexOf('profile') >= 0).length >= 1,
+    '更新页要写明「不会自动装进 profile」（用户看到按钮不叫「更新」时会想知道原因）')
+
+  /**
+   * **互斥**：从更新页点主题图标 → 更新页必须让位。
+   *
+   * 两个标志位同时为真时 `Panel` 只能渲染一个（它按「更新优先」排了序），
+   * 那样用户点主题图标却看到更新页，会以为按钮坏了。所以点击处必须清掉另一个。
+   *
+   * ⚠️ 主题图标**只在项目面板**上（更新页/主题页的头部没有它）——第一版我在更新页
+   * 里找它，拿到 `undefined` 直接抛错。所以顺序是：先返回项目面板，再点主题图标。
+   */
+  const updateBack = findAll(thTree, (node) => typeof node === 'object' && node !== null && node.type === 'button'
+    && findAll(node, (child) => child === '← 返回').length > 0)[0]
+  assert.ok(updateBack !== undefined, '更新页要有「返回」')
+  updateBack.props.onClick()
+  thTree = thPanel.component({})
+  const themeIcon2 = findAll(thTree, (node) => typeof node === 'object' && node.type === 'button'
+    && node.props !== undefined && typeof node.props.onClick === 'function'
+    && node.props.title !== undefined && String(node.props.title).indexOf('主题') === 0)[0]
+  assert.ok(themeIcon2 !== undefined, '返回项目面板后要能再找到主题图标')
+  themeIcon2.props.onClick()
+  thTree = thPanel.component({})
+  assert.equal(countClass(thTree, 'dshpz-panel'), 1, '主题页与更新页互斥，仍然只有一层面板')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('当前：') === 0).length >= 1,
+    '点主题图标必须真的切到主题页（不能因为更新页还开着而显示更新页）')
+  console.log('ok   更新页：主视图切换、说清不自动安装、与主题页互斥')
+
+  /* ④ 液态玻璃：默认皮肤正名 + 网格归零 + 模糊加厚 + 顶边换成白色高光。 */
+  const themeTree = thTree
+  assert.ok(findAll(themeTree, (node) => typeof node === 'string' && node.indexOf('液态玻璃') >= 0).length >= 1,
+    '主题页要出现「液态玻璃」——否则没人知道默认皮肤叫什么（这正是这一版要修的问题）')
+
+  /**
+   * 网格归零 + 模糊加厚：这两条是「把玻璃做实」的**可判定判据**。
+   *
+   * 不查 `THEME` 对象（那是闭包里的，测不到），而是查它渲染出的 CSS 变量声明串：
+   * `--dshpz-grid:transparent` 必须在，`blur(24px)` 必须在。
+   * 只验文案（「液态玻璃」四个字）会把「改了名但视觉一行没动」判成通过——
+   * 那正是用户说的「不是本来就是液态玻璃吗」那种改了个寂寞。
+   */
+  assert.ok(mod.CSS.indexOf('--dshpz-grid:transparent') >= 0,
+    '默认皮肤的网格必须归零（--dshpz-grid:transparent）——网格是科幻 HUD 的语言，不是玻璃的')
+  assert.ok(mod.CSS.indexOf('blur(24px)') >= 0,
+    '玻璃必须做实：backdrop-filter 的 blur 要提到 24px（18px 看不出玻璃感）')
+  assert.ok(mod.CSS.indexOf('rgba(255,255,255,.55)') >= 0,
+    '顶边高光要换成白色（彩色扫描线是 HUD 语言，不是玻璃的高光）')
+  console.log('ok   液态玻璃：正名 + 网格归零 + blur 24px + 顶边白色高光')
+
+  /* ⑤ 主题开发区：入口在场、粘贴框在场、导入按钮在空文本时禁用。 */
+  const devTitles = findAll(themeTree, (node) => typeof node === 'string'
+    && (node.indexOf('开发一套自己的主题') >= 0 || node.indexOf('分享给别人') >= 0))
+  assert.ok(devTitles.length >= 2, '主题页要有「开发」与「分享」两块（用户需求 3 的两个动作）')
+  const devInput = findAll(themeTree, (node) => typeof node === 'object' && node !== null
+    && node.props !== undefined && node.props.className === 'dshpz-tinput')[0]
+  assert.ok(devInput !== undefined, '开发区要有主题 id 输入框')
+  const packArea = findAll(themeTree, (node) => typeof node === 'object' && node !== null
+    && node.props !== undefined && node.props.className === 'dshpz-tpack')[0]
+  assert.ok(packArea !== undefined, '分享区要有主题包粘贴框（第二条分享路）')
+  const importBtn = findAll(themeTree, (node) => typeof node === 'object' && node !== null && node.type === 'button'
+    && findAll(node, (child) => child === '导入并应用').length > 0)[0]
+  assert.ok(importBtn !== undefined, '要有「导入并应用」按钮')
+  assert.equal(importBtn.props.disabled, true, '粘贴框为空时导入按钮必须禁用（空包必然失败）')
+  // 上传按钮只在找到主题仓库检出时才出现——找不到时给个必然失败的死按钮没意义。
+  const publishBtn = findAll(themeTree, (node) => typeof node === 'object' && node !== null && node.type === 'button'
+    && findAll(node, (child) => typeof child === 'string' && child.indexOf('上传（推送到主题仓库）') >= 0).length > 0)[0]
+  assert.equal(publishBtn, undefined, '没有仓库检出时不给上传按钮（避免死按钮）')
+  console.log('ok   主题开发区：开发/分享两块在场、粘贴框在场、空文本禁用导入、无检出不给上传')
 }
 
