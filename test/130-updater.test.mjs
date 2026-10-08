@@ -52,6 +52,8 @@ import {
   releaseListOf,
   releaseListOf as _releaseListOf,
   updaterArgsOf,
+  localVersion,
+  installedVersionOf,
   stageUpdaterScript,
   updaterScriptPath,
   listBackups,
@@ -549,6 +551,31 @@ try {
   // 读「上一次运行」：没有结果时返回 null（面板据此显示「还没装过」而不是报错）。
   assert.equal(readUpdateRun(), null, '没有结果文件时返回 null（不抛错）')
   assert.ok(Array.isArray(listBackups()), '备份清单要能列出来（没有就是空数组）')
+
+  /* ---------------- 本机版本必须读 profile，不能读「跑着的代码」 ---------------- */
+
+  /**
+   * 这条是**实测踩到的真坑**（v1.0.1 发完当场发现）：开发机上跑着的代码来自源码仓库
+   * （版本已是新的），而 profile 里装着的还是旧版。用 `pluginVersion()` 当「本机版本」，
+   * 面板会显示「已是最新」，用户却明明没升级——**假报「已是最新」比报错更糟**，
+   * 因为它让人以为没事，不会去查。
+   */
+  const lv = localVersion()
+  assert.ok(typeof lv.version === 'string' && lv.version !== '', 'localVersion 要给出一个版本号')
+  assert.ok(lv.source === 'profile' || lv.source === 'running', `来源只能是 profile 或 running，实际 ${lv.source}`)
+  // 造一个假 profile，里面装着一个**特定版本**，看它读不读得到。
+  const fakeProfileDir = mkdtempSync(join(tmpdir(), 'puzzle-ver-'))
+  mkdirSync(join(fakeProfileDir, 'node_modules', 'dsh-puzzle-mode'), { recursive: true })
+  writeFileSync(
+    join(fakeProfileDir, 'node_modules', 'dsh-puzzle-mode', 'package.json'),
+    JSON.stringify({ name: 'dsh-puzzle-mode', version: '7.7.7-from-profile' }) + '\n',
+  )
+  assert.equal(installedVersionOf(fakeProfileDir), '7.7.7-from-profile',
+    'installedVersionOf 要读 **profile 里装的**那份，而不是当前跑着的代码')
+  assert.equal(installedVersionOf(join(fakeProfileDir, '不存在')), '', 'profile 里没装 → 空串（不编一个版本）')
+  assert.equal(installedVersionOf(''), '', '空路径安全')
+  rmSync(fakeProfileDir, { recursive: true, force: true })
+  ok(`本机版本读 profile 里装的那份（当前 ${lv.version}，来源 ${lv.source}）`)
 
   console.log(`\n自动更新： ${passed} 通过 / 0 失败`)} finally {
   rmSync(root, { recursive: true, force: true })
