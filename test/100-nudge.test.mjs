@@ -28,6 +28,7 @@ import { join } from 'node:path'
 import {
   NUDGE_EVERY,
   NUDGE_MARK,
+  NUDGE_PUSH,
   NUDGE_MAX_LEVEL,
   NUDGE_REASON_CADENCE,
   NUDGE_REASON_REPEAT,
@@ -102,7 +103,10 @@ async function fire(listener, exec) {
 try {
   /* ---------------- 纯函数层：节拍 ---------------- */
 
-  assert.equal(NUDGE_EVERY, 6, `用户裁定节拍为 6 步（当前 ${NUDGE_EVERY}）`)
+  // v1.1.2：节拍由 6 放宽到 12（用户报「复读机」，催促是**确定会重复**的那一条）。
+  // 这里**不写死 12**，只钉住「它是个正整数、且节拍真的落在它的倍数上」——
+  // 数值是用户可调的，行为（纯节拍）才是契约。
+  assert.ok(Number.isSafeInteger(NUDGE_EVERY) && NUDGE_EVERY > 0, `节拍必须是正整数（当前 ${NUDGE_EVERY}）`)
   ok(`节拍 = ${NUDGE_EVERY} 步（用户裁定值）`)
 
   // **核心断言**：纯节拍——读写混合也必须按节拍催。
@@ -227,9 +231,18 @@ try {
   const cadenceText = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY, 1)
   assert.ok(cadenceText.includes(NUDGE_MARK), '催促带标记，便于辨认来源')
   assert.ok(cadenceText.includes(String(NUDGE_EVERY)), '第 1 档要写明走了多少步')
-  assert.ok(cadenceText.includes('报进度'), '第 1 档要的是「报进度 + 做下一步」，不是训斥')
-  assert.ok(!cadenceText.includes('不许再调'), '第 1 档不该禁工具（有产出时只是轻推）')
-  ok('第 1 档：报进度 + 做下一步（轻推）')
+  // 用户指定原文，必须出现在每一档里（它是这条注入的「身份」）。
+  //
+  // ⚠️ 这里**必须比对字面量**，不能只写 `includes(NUDGE_PUSH)`：
+  // 变异验证抓到过这个假绿——把 `NUDGE_PUSH` 改成空串后，`includes('')` 恒为真，
+  // 断言照样过。用户要的就是这一句原文，所以钉字面量才是真判据。
+  assert.equal(NUDGE_PUSH, '你怎么这么慢，快点做啊', '用户指定的那句必须一字不差')
+  assert.ok(cadenceText.includes('你怎么这么慢，快点做啊'), `第 1 档必须带用户指定的那句「${NUDGE_PUSH}」`)
+  // ⚠️ v1.1.2 的**行为反转**：旧文案写着「一句话报进度」，模型照做之后每个节拍
+  // 都写一句进度，句式几乎一样——那正是用户报的「复读机」。现在必须**禁止**它。
+  assert.ok(!cadenceText.includes('报进度'), '第 1 档**不许**再叫模型「报进度」（那是复读机的来源）')
+  assert.ok(cadenceText.split('\n').length === 1, `第 1 档必须只有一行（实际 ${cadenceText.split('\n').length} 行）`)
+  ok('第 1 档：一行、带指定那句、且不再要求「报进度」')
 
   const repeatText = nudgeText(NUDGE_REASON_REPEAT, NUDGE_EVERY, 0, '/same.txt')
   assert.ok(repeatText.includes('/same.txt'), '分段读的催促要点名是哪个文件')
@@ -237,11 +250,14 @@ try {
   assert.ok(repeatText.includes('并行'), '分段读的催促要教它并行读多个文件')
   ok('分段读催促：点名文件 + 教「一次读全 / 并行读」')
 
+  assert.ok(!cadenceText.includes('不许再调'), '第 1 档不该禁工具（有产出时只是轻推）')
   const hardText = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY * 2, 2)
   assert.ok(hardText.includes('不许再调'), '第 2 档必须禁掉只读工具（撤出口）')
+  assert.ok(hardText.includes('你怎么这么慢，快点做啊'), '第 2 档也要带那句（三档都带，用户一眼认得出）')
   const hardest = nudgeText(NUDGE_REASON_CADENCE, NUDGE_EVERY * 3, NUDGE_MAX_LEVEL)
   assert.ok(hardest.includes('立刻交付'), '最高档必须要求立刻交付')
-  ok(`第 2 档禁只读、第 ${NUDGE_MAX_LEVEL} 档要求立刻交付`)
+  assert.ok(hardest.includes('你怎么这么慢，快点做啊'), '最高档也要带那句')
+  ok(`第 2 档禁只读、第 ${NUDGE_MAX_LEVEL} 档要求立刻交付（三档都带「${NUDGE_PUSH}」）`)
 
   /* ---------------- 接线层：真钩子驱动 ---------------- */
 

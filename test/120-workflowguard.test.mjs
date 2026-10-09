@@ -334,6 +334,35 @@ try {
     `隔满 ${WORKFLOW_MIN_INTERVAL} 步后必须重新注入（否则规则静默失效）`)
   ok(`接线：隔满 ${WORKFLOW_MIN_INTERVAL} 步 → 重新注入`)
 
+  /* ---------------- v1.1.2：首次全文，之后一行指路 ---------------- */
+
+  // 为什么必须有这一组：用户报「复读机」，而这条注入在一个真实会话里出现了 510 次，
+  // 其中同一条流程被原样塞了 159 次**完整 11 步**。改法是把重复的那部分压成一行，
+  // 但**不能**压掉「第一次的完整步骤」——那会让模型压根看不到流程。
+  // 所以下面两条断言缺一不可：首次必须**含步骤**，重复必须**不含步骤**。
+  resetWorkflowGuard()
+  clearWorkflowGuard(sessionId)
+  const firstFire = await fire(wfListener, call('write', { file_path: join(root, '甲项目', 'lib', 'first.js') }, sessionId))
+  const firstText = firstFire.find((one) => one.includes(WORKFLOW_MARK)) ?? ''
+  assert.ok(firstText.includes('改动后验证'), '首次注入要点名流程名')
+  assert.ok(firstText.includes('跑语法检查'), '首次注入必须带**完整步骤**（否则模型看不到流程）')
+  assert.ok(!firstText.includes('步骤已给过'), '首次注入不该是「指路」形态')
+  ok('首次命中 → 完整步骤')
+
+  // 走到重复注入（隔满间隔），这次必须是**一行指路**。
+  let repeatText = ''
+  for (let i = 0; i < WORKFLOW_MIN_INTERVAL + 1; i += 1) {
+    const injected = await fire(wfListener, call('write', { file_path: join(root, '甲项目', 'lib', `again${i}.js`) }, sessionId))
+    const hit = injected.find((one) => one.includes(WORKFLOW_MARK))
+    if (hit !== undefined) repeatText = hit
+  }
+  assert.notEqual(repeatText, '', '隔够之后必须重新注入（不能因为压文案而彻底沉默）')
+  assert.ok(repeatText.includes('步骤已给过'), `重复注入必须是「指路」形态，实际：${repeatText.slice(0, 80)}`)
+  assert.ok(repeatText.includes('改动后验证'), '指路也要点名是哪条流程')
+  assert.ok(!repeatText.includes('跑语法检查'), '重复注入**不许**再带完整步骤（那正是复读机）')
+  assert.ok(repeatText.split('\n').length <= 2, `指路必须是一行（实际 ${repeatText.split('\n').length} 行）`)
+  ok('重复命中 → 一行指路（不带步骤）')
+
   // 换阶段：命中另一条流程 → 立刻注入，且注入的是**新那条**。
   // 乙项目已在上面建好（绑定记忆有 1 秒 TTL，见那段注释）。
   resetWorkflowGuard()

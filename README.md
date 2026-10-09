@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v1.1.1** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v1.1.2** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.1.1
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.1.2
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-1.1.1.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.1.1/dsh-puzzle-mode-1.1.1.tgz)
+[dsh-puzzle-mode-1.1.2.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.1.2/dsh-puzzle-mode-1.1.2.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -58,6 +58,29 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 
 ## 最新版本
 
+### v1.1.2 · 治「复读机」：注入降频 + 催短 + 加那句
+
+用户原话：**「他现在还是一直跟个复读机一样说相似的话，很烦」**，追问里点名 **「两个都烦」**
+（插件注入的行 + 模型自己的播报）。
+
+**先量，再改。** 一个 4 天的会话（8815 行日志）里，插件注入了 **688 条**，全部被 Web GUI
+渲染成独立消息行：工作流触发 **510**（同一条流程被原样塞 **159 次**完整 11 步）、
+催促 147、说话纠正 31。平均**每 1.8 条助手消息就被插一条**。
+
+| 改哪 | 改成什么 | 为什么 |
+| --- | --- | --- |
+| 工作流触发 | **首次全文，之后一行指路** | 重复的体积压到约 1/10；但不彻底闭嘴——压缩后模型看不到那 11 步 |
+| 催促 | 节拍 6 → **12** 步，文案压成**一行** | 它是**确定会重复**的那条；条数减半 + 每条降到约 1/4 |
+| 催促 | **撤掉「一句话报进度」** | 那句话被模型照做了，每到一个节拍就多一句播报——正是「复读机」的来源 |
+| 催促 | 加上**「你怎么这么慢，快点做啊」** | 用户指定原文，三档都带，一眼认得出 |
+| 提示段 | **工具调用之间不写「我刚发现了什么」** | 逐字比对抓不到「同一种动作重复」，只能用行为规则治 |
+
+解日志本身还有个坑：日志是**多帧 zstd**，`zstdDecompressSync` 只解第一帧——
+8964937 字节的文件解出来只有 195 字节，看起来像「日志是空的」。按魔数切帧（3996 帧）才对。
+
+**测试**：`npm test` 15 组全绿 + 跨插件握手 18/0；**变异验证 29 项全部按预期变红**
+（新增 5 项，其中一项第一版是**假绿**——断言写成 `includes(NUDGE_PUSH)`，
+常量改成空串后 `includes('')` 恒真，被变异验证抓出来，已改成比对字面量）。
 ### v1.1.1 · 修「一键更新装不上」（本机 github.com 不通）
 
 v1.1.0 发完当场真机自更新，**失败了**——但这次失败很有价值：**回退机制干净地生效了**
@@ -134,6 +157,9 @@ v1.1.0 发完当场真机自更新，**失败了**——但这次失败很有价
 `FS_NOT_OBSERVED` + `edit` → 把机制错误升格为行为纠正；单步决定宣告 ≥8 次 → 叫停。
 **只提醒，不拦截**——提醒错了只是多读一次，拦错了是任务卡死。
 
+
+> 更早的版本（v1.0.3 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
+
 ### 集成时**顺手发现了拼图插件自己的一个真 bug**
 
 核对 `exec.arguments` 的形状时（cot-guard 说它是字符串，拼图插件当对象用），
@@ -186,28 +212,6 @@ tool/call 共 248 条：arguments 是字符串 248 条，对象 0 条
 
 `npm test` 全绿：60 + 47 + 7 + 51 + 17 + 36 + 12 + 9 + 21 + 23 + 21 + 32 + 22 + 12 + 22；
 跨插件握手 18 / 0。
-### v1.0.3 · 修「打开更新面板就消失」
-
-用户报的**真机崩溃**：打开更新页，整个面板不见了。
-
-**根因**：更新页的渲染代码里用了 `sessionId`，而 `updatePage()` 里**没有这个变量**
-（更新是全局功能，本来就不需要会话）→ `ReferenceError` → React 整棵子树卸载。
-
-**为什么测试当时全绿**（这条比 bug 本身更重要）：`20-client` 的更新页断言确实存在，
-但夹具对 `method:'update'` 回的是 `{ ok: true }`（**没有 result**）——更新页只渲染
-「点右上角重新检查」那一行，**那条会崩的分支根本没走到**。一个从没被执行的渲染路径，等于没测。
-
-**修法三处**：① 夹具回**真实数据**（`check` / `releases` / `staged` 三条 action 的真实形状）；
-② 点开之后 **`await flush()`**（点开会同时发三个异步请求，不等就读树看到的是空态）；
-③ 断言「**有数据时必须渲染出内容**」（版本号 / 3 行摘要 / 「…还有 N 行」/「当前」标记 /
-安装结论 / 备份区块逐条验）。
-
-**变异验证**：把 `sessionId` 那个 bug 改回去 → 测试**立刻红**
-（`ReferenceError: sessionId is not defined`，栈顶直指 `updatePage`）；还原 → 绿。
-这条变异已加进 `mutate-check`（20 → 21 项）。
-
-> 更早的版本（v1.0.2 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
-
 ## 功能
 
 用户一次点了三件事：「模型在几度陈述时会复读类似的意思，而且陈述用英语」「读文件老是

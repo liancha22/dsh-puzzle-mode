@@ -68,6 +68,40 @@ const MUTATIONS = [
     to: 'const verdict = { inject: true }',
   },
   {
+    // v1.1.2 用户报的「复读机」：重复注入必须压成一行指路，不能再塞完整步骤。
+    // 把判据改成「永远给全文」= 退回改之前的行为，这条必须红。
+    label: '重复注入也给全文（退回「复读机」）',
+    file: 'lib/index.js',
+    test: 'test/120-workflowguard.test.mjs',
+    from: 'const full = verdict.reason === WORKFLOW_REASON_FIRST',
+    to: 'const full = true',
+  },
+  {
+    // 反过来：如果永远给「指路」，模型就**再也看不到完整步骤**了——规则静默失效。
+    label: '首次也只给指路（模型看不到完整步骤）',
+    file: 'lib/index.js',
+    test: 'test/120-workflowguard.test.mjs',
+    from: 'const full = verdict.reason === WORKFLOW_REASON_FIRST',
+    to: 'const full = false',
+  },
+  {
+    // 用户指定那句必须真的进了催促文案（否则等于没加）。
+    label: '催促丢掉用户指定那句',
+    file: 'lib/nudge.js',
+    test: 'test/100-nudge.test.mjs',
+    from: "export const NUDGE_PUSH = '你怎么这么慢，快点做啊'",
+    to: "export const NUDGE_PUSH = ''",
+  },
+  {
+    // v1.1.2 的行为反转：第 1 档**不许**再叫模型「报进度」（那是复读机的来源）。
+    // 退回旧文案，那条「不许出现报进度」的断言必须红。
+    label: '催促退回「要求报进度」（复读机的来源）',
+    file: 'lib/nudge.js',
+    test: 'test/100-nudge.test.mjs',
+    from: 'return `${NUDGE_MARK} 第 ${steps} 步了——${NUDGE_PUSH}。直接做下一步。`',
+    to: 'return `${NUDGE_MARK} 第 ${steps} 步了——${NUDGE_PUSH}。一句话报进度 + 直接做下一步。`',
+  },
+  {
     label: '版本比较恒等（永远判「已是最新」）',
     file: 'lib/updater.js',
     test: 'test/130-updater.test.mjs',

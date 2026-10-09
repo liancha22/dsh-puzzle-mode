@@ -8,14 +8,7 @@
 | --- | --- |
 | 仓库 | <https://github.com/liancha22/dsh-puzzle-mode>（public） |
 | 主题仓库 | <https://github.com/liancha22/dsh-puzzle-themes>（**新增**；主题不随插件打包，点一下从它下载） |
-| 版本 | v1.1.1（### v1.1.1 · 修「一键更新装不上」（本机 github.com 不通）
-
-v1.1.0 发完当场真机自更新，**失败了**——但这次失败很有价值：**回退机制干净地生效了**
-（三处全部还原、插件照旧可用），而日志把真原因写清楚了。
-
-**两次尝试、两次不同的死因**：
-
-| 规格 | 报错 |
+| 版本 | v1.1.2（治「复读机」：工作流触发改成首次全文 / 之后一行指路，催促节拍 6→12 且文案压成一行（并撤掉「报进度」这条指令），加上「你怎么这么慢，快点做啊」） |
 | --- | --- |
 | `github:owner/repo#tag` | `git+ssh://` → `Host key verification failed` |
 | `git+https://github.com/…#tag` | `Failed to connect to github.com:443 after 21119 ms` |
