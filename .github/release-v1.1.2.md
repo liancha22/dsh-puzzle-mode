@@ -109,8 +109,8 @@ npm run test:mutate   # 29 项变异全部按预期变红
 
 ## 附件校验
 
-`dsh-puzzle-mode-1.1.2.tgz` 共 BYTES 字节。
+`dsh-puzzle-mode-1.1.2.tgz` 共 607625 字节。
 
-sha256: SHA256_PLACEHOLDER
+sha256: 6606a3375e7105d92d27199f957ac2341b71077d2265668d8d9bdb21be8d76df
 
 面板的「更新」页会从这段正文里解析这个锚点，与下载到的字节比对；不符就拒绝解包。
