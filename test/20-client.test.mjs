@@ -1101,12 +1101,14 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
         releases: [
           {
             tag: 'v1.0.2', version: '1.0.2', name: '修「本机版本读错来源」', summary: ['第一行摘要', '第二行摘要', '第三行摘要'],
-            summaryTotal: 12, summaryRest: 9, summaryTruncated: true, body: '', publishedAt: '2026-10-08T00:00:00Z',
+            summaryTotal: 12, summaryRest: 9, summaryTruncated: true, summaryMissing: false, body: '', publishedAt: '2026-10-08T00:00:00Z',
             htmlUrl: 'https://x/1', prerelease: false, anchorSha256: '', current: false,
           },
           {
-            tag: 'v1.0.0', version: '1.0.0', name: '自动更新', summary: ['旧的一行'],
-            summaryTotal: 1, summaryRest: 0, summaryTruncated: false, body: '', publishedAt: '2026-10-07T00:00:00Z',
+            // 老版本（v1.1.2 及以前）正文里没有 `## 摘要` 区块 → summaryMissing。
+            // 面板必须**明说**「这版没写摘要」，不能显示成「这版没有说明」那种含糊话。
+            tag: 'v1.0.0', version: '1.0.0', name: '自动更新', summary: [],
+            summaryTotal: 0, summaryRest: 0, summaryTruncated: false, summaryMissing: true, body: '', publishedAt: '2026-10-07T00:00:00Z',
             htmlUrl: 'https://x/0', prerelease: false, anchorSha256: '', current: true,
           },
         ],
@@ -1237,6 +1239,8 @@ assert.ok(!emptyDrafts.includes('SUBMIT-SHOULD-NOT-HAPPEN'), '绝不能自动提
     '摘要行要真的渲染出来')
   assert.ok(findAll(thTree, (node) => typeof node === 'string' && node.indexOf('…还有') === 0).length >= 1,
     '被截断的版本要明说「…还有 N 行」')
+  assert.ok(findAll(thTree, (node) => typeof node === 'string' && node === '（这版没写摘要）').length >= 1,
+    '没有「## 摘要」区块的版本要明说「这版没写摘要」（v1.1.3：不再拿正文开头冒充摘要）')
   assert.ok(findAll(thTree, (node) => typeof node === 'string' && node === '当前').length >= 1,
     '当前装的那版要打「当前」标记')
   // 安装结果与备份：这两个分支同样只在有数据时才走得到。

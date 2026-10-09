@@ -48,6 +48,8 @@ import {
   sha256OfBytes,
   stagedTarballPath,
   RELEASE_SUMMARY_LINES,
+  SUMMARY_HEADING,
+  summarySectionOf,
   summarizeNotes,
   releaseListOf,
   releaseListOf as _releaseListOf,
@@ -535,6 +537,49 @@ try {
   assert.equal(summarizeNotes(null).lines.length, 0, '非字符串安全')
   ok('短正文不标截断 / 空值安全')
 
+  /* ---------------- 摘要只认「## 摘要」区块（v1.1.3） ---------------- */
+
+  /**
+   * **核心**：v1.1.3 起摘要必须来自正文里的 `## 摘要` 区块，**不再取正文前 3 行**。
+   *
+   * 为什么这条必须有测试：v1.1.2 的正文前 3 行是用户原话与背景铺垫，面板上那三句
+   * 一句都没说「改了什么」。位置（前 3 行）与内容（改了什么）不是一回事——
+   * 这条断言就是钉住这个区别，防止实现退回「取前 3 行」。
+   */
+  const withSection = [
+    '# v9.9.9 · 标题',
+    '',
+    '这段是背景铺垫，**不该**出现在摘要里。',
+    '',
+    '## 摘要',
+    '',
+    '- 第一句：改了什么。',
+    '- 第二句：为什么这么改。',
+    '- 第三句：还顺手做了什么。',
+    '',
+    '## 验收判据',
+    '',
+    '这里也不该进摘要。',
+  ].join('\n')
+  const picked = summarySectionOf(withSection)
+  assert.ok(picked.includes('第一句') && picked.includes('第三句'), '要取到「## 摘要」区块里的内容')
+  assert.ok(!picked.includes('背景铺垫'), '区块**之前**的正文不许进摘要（v1.1.2 的洋相就出在这）')
+  assert.ok(!picked.includes('验收判据') && !picked.includes('不该进摘要'), '区块**之后**的内容不许进摘要')
+  ok('摘要取「## 摘要」区块：前面的铺垫与后面的验收判据都不进')
+
+  // 没有这个区块 → 空串。**空串是有意义的**：面板据此显示「这版没写摘要」。
+  assert.equal(summarySectionOf('# v1 · 标题\n\n只有正文，没有摘要区块。'), '', '没有「## 摘要」区块就返回空串')
+  assert.equal(summarySectionOf(''), '', '空正文安全')
+  assert.equal(summarySectionOf(null), '', '非字符串安全')
+  // 标题必须**独占一行**才算：`## 摘要表` 不是摘要区块（否则会误吞正文）。
+  assert.equal(summarySectionOf('## 摘要表\n内容'), '', '「## 摘要表」不算摘要区块')
+  ok('没有「## 摘要」区块 → 空串（面板据此说「这版没写摘要」）')
+
+  const secSum = summarizeNotes(summarySectionOf(withSection))
+  assert.equal(secSum.lines.length, RELEASE_SUMMARY_LINES, '区块里的三句正好三行')
+  assert.equal(secSum.truncated, false, '三句不该被标成截断')
+  ok('「## 摘要」区块的三句原样显示（不被截断）')
+
   // 表格行要压平保留：发版正文的关键信息常在表里，整行丢掉会漏掉「改了什么」。
   const tableSum = summarizeNotes('| 通道 | 结果 |\n| --- | --- |\n| API | 通 |')
   assert.ok(tableSum.lines.some((one) => one.includes('通道') && one.includes('结果')), '表格表头要压平保留')
@@ -545,7 +590,7 @@ try {
   /* ---------------- Release 列表解析 ---------------- */
 
   const listJson = [
-    { tag_name: 'v1.0.0', name: 'v1.0.0 · 新', body: '第一行\n第二行\n第三行\n第四行', published_at: '2026-10-08T00:00:00Z', html_url: 'https://x/1', prerelease: false, draft: false },
+    { tag_name: 'v1.0.0', name: 'v1.0.0 · 新', body: '背景铺垫\n\n## 摘要\n第一行\n第二行\n第三行\n第四行', published_at: '2026-10-08T00:00:00Z', html_url: 'https://x/1', prerelease: false, draft: false },
     { tag_name: 'v0.9.0', name: 'v0.9.0 · 旧', body: '旧的一行', published_at: '2026-09-01T00:00:00Z', html_url: 'https://x/09', prerelease: false, draft: false },
     { tag_name: 'v9.9.9', name: '草稿', body: 'x', draft: true },
     { name: '缺 tag', body: 'y' },
@@ -559,9 +604,13 @@ try {
   // 「当前装的那版」要标出来——没有这个标记，用户得自己找。
   assert.equal(parsedList.releases[0].current, false, '不是当前装的那版')
   assert.equal(parsedList.releases[1].current, true, '当前装的那版要标记出来')
-  assert.equal(parsedList.releases[0].summary.length, RELEASE_SUMMARY_LINES, '每版都带摘要')
+  assert.equal(parsedList.releases[0].summary.length, RELEASE_SUMMARY_LINES, '摘要区块四行 → 压成三行')
   assert.equal(parsedList.releases[0].summaryTruncated, true, '四行正文压成三行 → 标截断')
-  ok('Release 列表：剔草稿/缺字段、按版本倒序、标出当前版、每版带摘要')
+  assert.equal(parsedList.releases[0].summaryMissing, false, '有摘要区块 → 不算「没写摘要」')
+  assert.ok(parsedList.releases[0].summary[0].includes('第一行'), '摘要取的是「## 摘要」区块里的内容，不是正文开头')
+  assert.equal(parsedList.releases[1].summary.length, 0, '没有「## 摘要」区块 → 摘要为空')
+  assert.equal(parsedList.releases[1].summaryMissing, true, '没有区块要标成「这版没写摘要」（面板据此显示那句话）')
+  ok('Release 列表：剔草稿/缺字段、按版本倒序、标出当前版、摘要只认「## 摘要」区块')
 
   assert.equal(releaseListOf(null).ok, false, '非数组要明确失败')
   assert.equal(releaseListOf([]).releases.length, 0, '空列表安全')

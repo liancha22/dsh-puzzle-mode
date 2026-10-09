@@ -158,6 +158,24 @@ const MUTATIONS = [
     to: '    if (clean.startsWith(\'|\')) continue\n    if (false) {',
   },
   {
+    // v1.1.3 用户的要求：「更新日志的信息改为简短三句交代更新了什么」。
+    // 退回「取正文前 3 行」= 又拿背景铺垫冒充摘要（v1.1.2 上实测三句里没有一句说改了什么）。
+    label: '摘要退回「取正文前 3 行」（拿背景铺垫冒充摘要）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: '    const section = summarySectionOf(body)',
+    to: '    const section = body',
+  },
+  {
+    // 反过来：没有「## 摘要」区块时必须**空**（面板据此说「这版没写摘要」）。
+    // 若给个兜底文案，面板就分不清「没写摘要」与「写了摘要」。
+    label: '没写摘要时也编一段兜底（分不清写没写）',
+    file: 'lib/updater.js',
+    test: 'test/130-updater.test.mjs',
+    from: "  if (start === -1) return ''",
+    to: "  if (start === -1) return '（这版没写摘要）'",
+  },
+  {
     label: '更新器脚本暂存到 node_modules（装坏就没得救）',
     file: 'lib/updater.js',
     test: 'test/130-updater.test.mjs',

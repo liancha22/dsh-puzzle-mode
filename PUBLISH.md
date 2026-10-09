@@ -4,11 +4,11 @@
 
 ## 0. 状态
 
-| 项 | 现状（2026-10-07） |
+| 项 | 现状（2026-10-09） |
 | --- | --- |
 | 仓库 | <https://github.com/liancha22/dsh-puzzle-mode>（public） |
 | 主题仓库 | <https://github.com/liancha22/dsh-puzzle-themes>（**新增**；主题不随插件打包，点一下从它下载） |
-| 版本 | v1.1.2（治「复读机」：工作流触发改成首次全文 / 之后一行指路，催促节拍 6→12 且文案压成一行（并撤掉「报进度」这条指令），加上「你怎么这么慢，快点做啊」） |
+| 版本 | v1.1.3（更新日志改成「简短三句」：摘要只认 Release 正文里的 `## 摘要` 区块，没写就明说「这版没写摘要」，不再取正文前 3 行；最近三版的正文已改短） |
 | --- | --- |
 | `github:owner/repo#tag` | `git+ssh://` → `Host key verification failed` |
 | `git+https://github.com/…#tag` | `Failed to connect to github.com:443 after 21119 ms` |
@@ -378,7 +378,7 @@ tar -xzf /tmp/new.tar.gz -C /tmp && grep '"version"' /tmp/dsh-puzzle-mode-<新sh
 | 4 | `UI.md` | 头部「对应 vX.Y.Z」 |
 | 5 | `PUBLISH.md` | 第 0 节状态表的版本与日期 |
 | 6 | `package.json` | `version`；`description` 是**对外介绍**（插件管理器 / npm / GitHub 侧栏显示的那段），**只讲这个插件是干什么的**，见下「description 别写成开发日志」 |
-| 7 | `.github/release-vX.Y.Z.md` | 新版本的正文 + 「验收判据」一节 |
+| 7 | `.github/release-vX.Y.Z.md` | 正文 = **标题 + `## 摘要`（最多三句）+ 附件校验**（`tools/make-release-notes.mjs` 生成）。「验收判据」不再进正文，放 `CHANGELOG.md` 的同一版小节里 |
 | 8 | `.github/images/` | **改过 `UI.md` 就必须重渲染**：`npm run render-tutorial`（见下） |
 | 9 | **GitHub 仓库 About** | 仓库页右上角那段介绍（**不在仓库文件里**，改不到 git，只能走 API）：`PATCH /repos/liancha22/dsh-puzzle-mode`。与 `package.json` 的 `description` 同一读者、同一规矩——**别抄用户原话、别写开发流程** |
 
