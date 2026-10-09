@@ -180,6 +180,36 @@ const MUTATIONS = [
     from: '        body.push(releaseList(view))',
     to: '        body.push(releaseList(view, sessionId))',
   },
+  {
+    label: '入参只认对象（退回那个静默失效的真 bug）',
+    file: 'lib/toolargs.js',
+    test: 'test/160-toolargs-fsguard.test.mjs',
+    // 这是**真缺陷**的复现：真实 `exec.arguments` 是字符串（会话日志 248/248 条），
+    // 只认对象会让「只拼不写拦截」等五处静默失效——不报错，只是永远不生效。
+    from: '  if (typeof raw === \'string\') {',
+    to: '  if (false) {',
+  },
+  {
+    label: 'FS 错误码只认顶层（退回 cot-guard 踩过的假绿）',
+    file: 'lib/fsguard.js',
+    test: 'test/160-toolargs-fsguard.test.mjs',
+    from: '  const nested = error.info !== undefined && error.info !== null ? error.info.code : undefined',
+    to: '  const nested = undefined',
+  },
+  {
+    label: '观察表不刷新（刚改过的文件被误报）',
+    file: 'lib/fsguard.js',
+    test: 'test/160-toolargs-fsguard.test.mjs',
+    from: '  state.log.refresh(path, state.step)\n  return outcome',
+    to: '  return outcome',
+  },
+  {
+    label: '闸门在信息不足时也拦（把熔断升级路径吃掉）',
+    file: 'lib/injectgate.js',
+    test: 'test/160-toolargs-fsguard.test.mjs',
+    from: '  if (state.turn < 0) {',
+    to: '  if (false) {',
+  },
 ]
 
 let failed = 0

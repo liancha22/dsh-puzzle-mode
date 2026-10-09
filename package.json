@@ -1,7 +1,7 @@
 {
   "name": "dsh-puzzle-mode",
-  "version": "1.0.3",
-  "description": "DSH 插件：拼图模式——把项目拆成主文档 + 若干模块文档，AI 主动提问把不确定项变成已定项，用五维算项目健康性。一个会话可同时绑多个项目；主文档第五节 ## 工作流 是标准化流水线，命中触发词自动注入，并按命中集合去重（同一阶段不刷屏，换阶段立刻重注）。**自动更新**：面板可翻各版本更新日志（每版最多 3 行摘要），点一键更新；装失败会**自动回退**到你原来那版。**主题开发与分享**：一键建脚手架 + 填开发提示词，一键推送到主题仓库，也能导出单文件主题包分享。默认皮肤为**液态玻璃**。**说话纠正**（整句英文 / 复读输入时当场纠正）、每 6 步**催促**、连续 3 次同样调用触发**重复思考熔断**、**自动审查只找代码漏洞**。文档格式 v7；与 dsh-infinite-gen-5 同装时按契约共存。",
+  "version": "1.1.0",
+  "description": "DSH 插件：拼图模式——把项目拆成主文档 + 若干模块文档，AI 主动提问把不确定项变成已定项，用五维算项目健康性。一个会话可同时绑多个项目；主文档第五节 ## 工作流 是标准化流水线，命中触发词自动注入并按命中集合去重。**自动更新**：可翻各版本更新日志（每版最多 3 行摘要），一键更新装失败会**自动回退**。**主题开发与分享**：一键建脚手架、一键推送到主题仓库，也能导出单文件主题包；默认皮肤为**液态玻璃**。**文件观察守卫**：写被拒时提示「先 read 再重试」、文件久未读时提前提醒、未查证就改时做行为纠正。所有注入（含**说话纠正** / **催促** / **重复思考熔断**）共用一道闸门，防叠成噪音。**自动审查只找代码漏洞**。文档格式 v7；与 dsh-infinite-gen-5 同装时按契约共存。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -24,7 +24,7 @@
     "compat.json"
   ],
   "scripts": {
-    "test": "node test/10-puzzle.test.mjs && node test/20-client.test.mjs && node test/30-rpc.test.mjs && node test/40-pre-execute.test.mjs && node test/50-contract.test.mjs && node test/60-loopguard.test.mjs && node test/70-themes.test.mjs && node test/80-ask-pause.test.mjs && node test/90-audit-tool.test.mjs && node test/100-nudge.test.mjs && node test/110-speech.test.mjs && node test/120-workflowguard.test.mjs && node test/130-updater.test.mjs && node test/140-themedev.test.mjs && node test/150-installer.test.mjs && node tools/verify-cross-plugin.mjs",
+    "test": "node test/10-puzzle.test.mjs && node test/20-client.test.mjs && node test/30-rpc.test.mjs && node test/40-pre-execute.test.mjs && node test/50-contract.test.mjs && node test/60-loopguard.test.mjs && node test/70-themes.test.mjs && node test/80-ask-pause.test.mjs && node test/90-audit-tool.test.mjs && node test/100-nudge.test.mjs && node test/110-speech.test.mjs && node test/120-workflowguard.test.mjs && node test/130-updater.test.mjs && node test/140-themedev.test.mjs && node test/150-installer.test.mjs && node test/160-toolargs-fsguard.test.mjs && node tools/verify-cross-plugin.mjs",
     "test:mutate": "node tools/mutate-check.mjs",
     "test:contract": "node test/50-contract.test.mjs",
     "verify:cross": "node tools/verify-cross-plugin.mjs",
