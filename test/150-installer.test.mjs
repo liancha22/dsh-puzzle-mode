@@ -108,12 +108,38 @@ try {
   const written = JSON.parse(readFileSync(resultPath, 'utf8'))
   assert.equal(written.ok, false, '结果文件要标失败')
   assert.equal(written.rolledBack, true, '结果文件要标「已回退」')
-  assert.equal(written.stage, 'install', '阶段是 install（pnpm 那一步失败的）')
+  /**
+   * 阶段取决于**在哪一步失败**，而「不存在的 tag」现在更早就会失败。
+   *
+   * v1.1.1 起安装流程多了一步：**先在插件侧把 tag 解析成 SHA**
+   * （因为本机 `github.com:443` 不通，pnpm 自己解析不了——见
+   * `tools/check-install-spec.mjs` 里那张可达性表）。
+   * 所以假 tag 会在 `resolve` 阶段就失败，而不是等到 `install`。
+   *
+   * 两种都接受：判据是「如实记录了失败在哪一步」，而不是钉死某一个阶段名。
+   */
+  assert.ok(written.stage === 'install' || written.stage === 'resolve',
+    `阶段要如实记录（install 或 resolve），实际 ${written.stage}`)
   assert.ok(Array.isArray(written.rollback.steps) && written.rollback.steps.length === 3,
     '回退步骤要逐条记录（三个目标各一条）')
   assert.ok(written.rollback.steps.every((one) => one.ok === true), '三步都成功')
-  assert.ok(written.log !== undefined && written.log.length > 0, '要带回 pnpm 的日志（不然排不了故障）')
-  ok('结果文件如实记录：失败 + 已回退 + 逐步结果 + 日志')
+  /**
+   * 失败信息要**够排故障**——但「够」的形式随失败阶段而变：
+   *   - 失败在 `install`（跑了 pnpm）→ 要有 pnpm 的日志；
+   *   - 失败在 `resolve`（还没跑 pnpm）→ 要有**解析失败的原因**。
+   *
+   * 判据的本意是「用户拿到失败时能看到发生了什么」，而不是钉死某一个字段名。
+   * v1.1.1 起「不存在的 tag」会在 `resolve` 阶段失败，所以两种都接受。
+   */
+  if (written.stage === 'resolve') {
+    assert.ok(typeof written.error === 'string' && written.error !== '',
+      '解析阶段失败要写明原因（api.github.com 不可达？tag 不存在？）')
+    assert.ok(written.error.includes('tag') || written.error.includes('解析'),
+      `失败原因要提到 tag/解析，实际：${written.error}`)
+  } else {
+    assert.ok(written.log !== undefined && written.log.length > 0, '要带回 pnpm 的日志（不然排不了故障）')
+  }
+  ok('结果文件如实记录：失败 + 已回退 + 逐步结果 + 可排查的原因')
 
   /* ---------------- 备份与「正在跑」 ---------------- */
 
@@ -141,36 +167,56 @@ try {
    * **让它跑久一点**（假 profile 指向一个不存在的 tag，pnpm 解析要几秒），
    * 在它跑的时候读结果文件，必须看到 `running: true`。
    */
-  const slowProfile = fakeProfile('v0.0.0-nonexistent-for-running-check')
-  const child = spawn(process.execPath, [
-    script, '--profile', slowProfile, '--tag', 'v0.0.0-nonexistent-for-running-check', '--expect-version', '0.0.0',
-  ], { stdio: 'ignore' })
+  /**
+   * ⚠️ 这里必须用一个**真实存在、能解析出 SHA** 的 tag（v1.1.0）。
+   *
+   * 第一版用的是假 tag（`v0.0.0-nonexistent`），在 v1.1.1 之前没问题——
+   * 那时失败发生在 `install` 阶段，仍会先写出 `phase: 'install'`。
+   * 但现在流程多了一步「先解析 tag → SHA」，**假 tag 在解析阶段就失败**，
+   * 根本走不到 install，于是这条断言变红。
+   *
+   * 换成真 tag 后流程真的进入 pnpm 那一段，就能验到「这一段也报 running」。
+   * 这是**联网**测试：解析要问 api.github.com。断网时它会跳过而不是假红。
+   */
+  const realTag = 'v1.1.0'
+  const probe = await fetch(`https://api.github.com/repos/liancha22/dsh-puzzle-mode/git/refs/tags/${realTag}`, {
+    headers: { 'User-Agent': 'dsh-puzzle-mode-test' },
+    signal: AbortSignal.timeout(15000),
+  }).then((r) => r.ok).catch(() => false)
+  if (probe !== true) {
+    console.log('skip 「我在跑」那一段：api.github.com 不可达（这一步需要联网解析 tag）')
+  } else {
+    const slowProfile = fakeProfile(realTag)
+    const child = spawn(process.execPath, [
+      script, '--profile', slowProfile, '--tag', realTag, '--expect-version', '0.0.0',
+    ], { stdio: 'ignore' })
 
-  // 边跑边看：只要出现过一次 `running: true`，就说明「我在跑」真的写出来了。
-  let sawRunning = false
-  let sawPhaseInstall = false
-  for (let i = 0; i < 200; i += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
-    let raw = null
-    try {
-      raw = JSON.parse(readFileSync(resultPath, 'utf8'))
-    } catch (_error) {
-      raw = null
+    // 边跑边看：只要出现过一次 `running: true`，就说明「我在跑」真的写出来了。
+    let sawRunning = false
+    let sawPhaseInstall = false
+    for (let i = 0; i < 400; i += 1) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
+      let raw = null
+      try {
+        raw = JSON.parse(readFileSync(resultPath, 'utf8'))
+      } catch (_error) {
+        raw = null
+      }
+      if (raw !== null && raw.running === true) {
+        sawRunning = true
+        if (raw.phase === 'install') sawPhaseInstall = true
+      }
+      // 终态出现了就停（脚本已经写完结果）。
+      if (raw !== null && raw.running !== true && raw.stage !== '' && raw.stage !== 'dry-run') break
+      if (child.exitCode !== null) break
     }
-    if (raw !== null && raw.running === true) {
-      sawRunning = true
-      if (raw.phase === 'install') sawPhaseInstall = true
-    }
-    // 终态出现了就停（脚本已经写完结果）。
-    if (raw !== null && raw.running !== true && raw.stage !== '' && raw.stage !== 'dry-run') break
-    if (child.exitCode !== null) break
+    try { child.kill() } catch (_error) { /* 已经退出了 */ }
+
+    assert.equal(sawRunning, true,
+      '安装器必须在干重活**之前**写下「我在跑」——否则面板分不清「正在装」与「根本没起来」（实测踩过：进程在跑，面板什么都看不到）')
+    assert.equal(sawPhaseInstall, true, '进入安装阶段要再报一次（pnpm 下载解包最慢，这一段最需要可见）')
+    ok('「我在跑」真的被写出来（轮询期间观察到 running + phase=install）')
   }
-  try { child.kill() } catch (_error) { /* 已经退出了 */ }
-
-  assert.equal(sawRunning, true,
-    '安装器必须在干重活**之前**写下「我在跑」——否则面板分不清「正在装」与「根本没起来」（实测踩过：进程在跑，面板什么都看不到）')
-  assert.equal(sawPhaseInstall, true, '进入安装阶段要再报一次（pnpm 解析依赖最慢，这一段最需要可见）')
-  ok('「我在跑」真的被写出来（轮询期间观察到 running + phase=install）')
 
   /* ---------------- 脚本被暂存到 DSH_HOME（不在 node_modules） ---------------- */
 

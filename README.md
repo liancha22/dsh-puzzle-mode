@@ -18,7 +18,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，点一下从仓库下）
-- 最新版：**v1.1.0** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v1.1.1** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：**DSH 0.2.0-rc.2**（peer 覆盖 0.1.5 / 0.1.6 / 0.1.7 全部预发布版，见下）
 - **面板 UI 逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 
@@ -29,7 +29,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.1.0
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v1.1.1
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -40,7 +40,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-1.1.0.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.1.0/dsh-puzzle-mode-1.1.0.tgz)
+[dsh-puzzle-mode-1.1.1.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v1.1.1/dsh-puzzle-mode-1.1.1.tgz)
 （含全部源码）
 
 **方式三 · dsh CLI**
@@ -58,6 +58,60 @@ dsh plugin --profile web add github:liancha22/dsh-puzzle-mode
 
 ## 最新版本
 
+### v1.1.1 · 修「一键更新装不上」（本机 github.com 不通）
+
+v1.1.0 发完当场真机自更新，**失败了**——但这次失败很有价值：**回退机制干净地生效了**
+（三处全部还原、插件照旧可用），而日志把真原因写清楚了。
+
+**两次尝试、两次不同的死因**：
+
+| 规格 | 报错 |
+| --- | --- |
+| `github:owner/repo#tag` | `git+ssh://` → `Host key verification failed` |
+| `git+https://github.com/…#tag` | `Failed to connect to github.com:443 after 21119 ms` |
+
+**根因**：本机可达性实测（2026-10-09）：
+
+| 域名 | 443 |
+| --- | --- |
+| `api.github.com` | 通 |
+| `codeload.github.com` | 通 |
+| **`github.com`** | **不通** |
+
+而 pnpm 装 git 依赖要**两步**：① 在 `github.com` 上 `git ls-remote` 解析 tag → SHA；
+② 按 SHA 从 codeload 下 tarball。**第一步就死了**——所以任何要碰 `github.com`
+的规格都装不上，换协议解决不了。
+
+**解法**：把第一步挪进插件——插件走可达的 `api.github.com` 解析出 SHA，
+再把 **SHA 版的 codeload URL** 交给 pnpm，那一步不必碰 `github.com`。
+
+这不是权宜之计：pnpm 自己写进 `pnpm-lock.yaml` 的就是这个形式
+（实测本机锁文件：`version: https://codeload.github.com/…/tar.gz/<sha>`），
+所以装完 `package.json` / 锁文件的形状与原来一致，回退与后续升级都不受影响。
+用 SHA 而不是 tag 还有个额外好处：**tag 可以被移动**（本仓发版时确实
+`git tag -f` 过），SHA 不能——这才是「装的东西可复现」的前提。
+
+### 顺带修掉三个由此暴露的缺陷
+
+1. **自检把成功判成失败**：判据一是「依赖声明里含 tag」，而 SHA 版 URL 里没有 tag
+   → 一次**已经装成功**的安装被拦下并回退（实测）。判据的本意是「指向这次要装的那一版」，
+   而 SHA 更精确地表达了这件事，所以改成「有 SHA 就认 SHA，没给才退回认 tag」。
+2. **失败信息没有信息量**：第一版只写「pnpm add 退出码 1」，而真正的死因
+   （`Host key verification failed`）躺在 4000 字符的日志里。现在会把关键行
+   摘出来放进 `error`——**失败信息的第一职责是让人知道下一步该干什么**。
+3. **`main()` 是 async 却没有 `.catch`**：未处理的 rejection 会让 Node
+   打一行警告后以**退出码 0** 结束，于是面板看到的「进程结束」是成功，
+   而结果文件什么都没写 → **面板永远转圈**。现在兜底写结果并退出码 1。
+
+### 新增一个机械检查
+
+`tools/check-install-spec.mjs`（11 项）：面板显示的命令与安装器实际执行的 spec
+分处两个文件（后者不能 import 前者），靠人记着同步必然漂移。
+它**剥掉注释再查代码**——第一版直接查全文，把「解释为什么不用它」的注释也判成违规，
+而那种检查会逼着人删掉解释，下一个人就会把旧写法加回来。
+
+`npm test` 全绿：60 + 47 + 7 + 51 + 17 + 36 + 12 + 9 + 21 + 23 + 21 + 32 + 22 + 12 + 22；
+跨插件握手 18 / 0。**变异验证 25 项全部按预期变红。**
 ### v1.1.0 · 集成 dsh-cot-guard：文件观察守卫 + 注入闸门
 
 用户要求把 `dsh-cot-guard` 的**功能集成进拼图插件**（不是另装一个插件）。
@@ -151,30 +205,8 @@ tool/call 共 248 条：arguments 是字符串 248 条，对象 0 条
 **变异验证**：把 `sessionId` 那个 bug 改回去 → 测试**立刻红**
 （`ReferenceError: sessionId is not defined`，栈顶直指 `updatePage`）；还原 → 绿。
 这条变异已加进 `mutate-check`（20 → 21 项）。
-### v1.0.2 · 修「本机版本读错来源」（假报「已是最新」）
 
-v1.0.1 发完当场实测发现的**真缺陷**——它不报错，只是**安静地说错话**：
-
-> 线上最新 = 1.0.1 \| 本机 = 1.0.1 \| 状态 = latest
-> 没有新版本，跳过
-
-**但本机 profile 里装的明明是 1.0.0。** 面板会说「已经是最新」，用户不会去升级。
-
-**根因**：pluginVersion() 读的是**当前正在执行的这份代码**所在的 package.json。
-开发机上这常常是**源码仓库**（版本已是新的），而 profile 里装着的是旧版。
-
-**修法**：新增 localVersion() 作为「本机版本」的**唯一入口**——先读 profile 里装的那份，
-读不到才退回当前代码；并回传 ersionSource（profile / unning）让面板能说清版本号从哪来。
-三处（check / download / staged）全部改走它——**三处各写一遍就会漂移**，
-而漂移的后果正是这个 bug。
-
-**为什么值得单独发一版**：「假报已是最新」比报错更糟——报错会让人去查，假报会让人以为没事。
-这类缺陷只有**真跑一次**才看得见：单元测试里 profile 与源码版本通常一致，怎么测都是绿的。
-新增断言（X-updater 22 → 32 项）造假 profile 装 .7.7-from-profile，
-断言读出的是**那个**版本。
-
-
-> 更早的版本（v1.0.1 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
+> 更早的版本（v1.0.2 及以前）见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 功能
 

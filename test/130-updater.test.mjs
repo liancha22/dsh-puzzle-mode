@@ -280,8 +280,48 @@ try {
 
   const cmd = installCommandOf('1.0.0', { profile: 'C:\\profiles\\desktop' })
   assert.ok(cmd.command.includes('cd "C:\\profiles\\desktop"'), '有 profile 路径时先 cd')
-  assert.ok(cmd.command.includes(`pnpm add ${UPDATE_PACKAGE_NAME}@github:`), '用 pnpm add + github: 规格')
-  assert.ok(cmd.command.includes('#v1.0.0'), '规格里带 tag')
+  /**
+   * ⚠️ 断言从 `@github:` → `@git+https://` → **codeload 的 SHA 版 URL**（两次实测踩到）。
+   *
+   * 第一次真机自更新失败：
+   * ```
+   * git ls-remote "git+ssh://git@github.com/liancha22/dsh-puzzle-mode.git" v1.1.0
+   * Host key verification failed.
+   * ```
+   * 改成显式 `git+https://` 后又失败：
+   * ```
+   * fatal: unable to access 'https://github.com/...': Failed to connect to github.com:443
+   * ```
+   * 实测可达性：`api.github.com` 通 / `codeload.github.com` 通 / **`github.com` 不通**。
+   * 而 pnpm 装 git 依赖第一步就是在 `github.com` 上 `git ls-remote` 解析 tag——
+   * 所以**任何要碰 `github.com` 的规格都装不上**。
+   *
+   * 解法是把那一步挪到插件里（走可达的 api 拿 SHA），再把 SHA 版 codeload URL
+   * 交给 pnpm。这不是权宜之计：pnpm 自己写进锁文件的就是这个形式。
+   *
+   * 这条断言的**本意没变**——「依赖仍是 tarball 规格、不是 `file:`」，
+   * 这样升级后 `package.json` 的形状不变（见下面那条 `file:` 断言）。
+   */
+  assert.ok(cmd.command.includes(`pnpm add ${UPDATE_PACKAGE_NAME}@https://codeload.github.com/`),
+    '用 pnpm add + codeload 的 SHA 版 URL（github: 与 git+https://github.com/ 都要碰 github.com，实测不通）')
+  assert.ok(!cmd.command.includes(`${UPDATE_PACKAGE_NAME}@github:`),
+    '不许再用 github: 简写（实测 Host key verification failed）')
+  assert.ok(!cmd.command.includes(`${UPDATE_PACKAGE_NAME}@git+https://github.com/`),
+    '不许用 git+https://github.com/（实测直连 21 秒超时）')
+  // 给了 SHA 就用 SHA（不可变），没给才退回 tag——面板显示的命令要能直接跑通。
+  const withSha = installCommandOf('1.0.0', { tag: 'v1.0.0', sha: 'a'.repeat(40), profile: 'C:\\p' })
+  assert.ok(withSha.spec.includes('a'.repeat(40)), '给了 SHA 就拼进 URL（SHA 不可变，tag 可被移动）')
+  assert.ok(withSha.spec.includes('#') === false, 'codeload URL 用 /<sha> 不用 #tag')
+  /**
+   * 没给 SHA 时，那条命令要**说清该装哪一版**。
+   *
+   * 早先这条断言写的是「规格里带 `#v1.0.0`」——那是 git 规格时代的形状。
+   * 改成 codeload 的 `/<sha>` 之后 tag 不再出现在 URL 里，于是它变红。
+   * 但判据的**本意**仍然成立：用户看这条命令时要知道它装的是哪一版。
+   * 所以改成认「命令里出现了这个 tag」（作为提示文字也算）。
+   */
+  assert.ok(cmd.command.includes('v1.0.0'),
+    '没给 SHA 时命令里要写清是哪个 tag（占位符里带上它）')
   // 沿用 profile 原有的 `github:` 规格族，升级后 package.json 形状不变。
   // 若用 `file:` 指向暂存目录，那个目录一被清理依赖就悬空了。
   assert.ok(!cmd.command.includes('file:'), '不许用 file: 规格（暂存目录被清理后依赖会悬空）')

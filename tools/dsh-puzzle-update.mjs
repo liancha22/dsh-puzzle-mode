@@ -43,6 +43,54 @@ import { dirname, join } from 'node:path'
 /** 本插件的包名。 */
 const PACKAGE_NAME = 'dsh-puzzle-mode'
 
+/**
+ * 仓库 slug（`owner/name`）。
+ *
+ * 与 `lib/updater.js` 的 `UPDATE_REPO` 必须一致——但这里是**独立脚本**，
+ * 它要能在插件自己被装坏时照常跑（那正是它存在的理由），所以不能 import 插件的代码。
+ * 两处的值由 `tools/check-install-spec.mjs` 与 `test/130-updater.test.mjs` 钉住。
+ */
+const REPO_SLUG = 'liancha22/dsh-puzzle-mode'
+
+/**
+ * ## 为什么装的是 **codeload 的 tarball URL**，不是 `github:` 也不是 `git+https://`
+ *
+ * 本机实测（2026-10-09）：
+ *
+ * | 域名 | 443 |
+ * |---|---|
+ * | `api.github.com` | 通 |
+ * | `codeload.github.com` | 通 |
+ * | `objects.githubusercontent.com` | 通 |
+ * | **`github.com`** | **不通** |
+ *
+ * 而 pnpm 装 git 依赖要**两步**：①`github.com` 上 `git ls-remote` 解析 tag → SHA；
+ * ② 按 SHA 从 codeload 下 tarball。第一步就死了，所以两种 git 规格都装不上：
+ *
+ * - `github:owner/repo#tag` → pnpm 按环境挑协议，实测挑中 `git+ssh` →
+ *   `Host key verification failed`（本机没有 GitHub 的 SSH 主机密钥）；
+ * - `git+https://github.com/...#tag` → 直连 `github.com:443` →
+ *   `Failed to connect to github.com:443 after 21119 ms`。
+ *
+ * **解法是把第一步挪到插件里做**：插件走 `api.github.com`（可达）解析出 SHA，
+ * 然后把「SHA 版」的 codeload URL 交给 pnpm——那一步 pnpm **不需要**碰 `github.com`。
+ *
+ * 这不是权宜之计：pnpm 自己在 `pnpm-lock.yaml` 里存的就是这个形式
+ * （实测本机锁文件：`version: https://codeload.github.com/liancha22/dsh-puzzle-mode/tar.gz/<sha>`），
+ * 所以装完 `package.json` / 锁文件的形状与原来**完全一致**，回退与后续升级都不受影响。
+ */
+const CODELOAD_BASE = 'https://codeload.github.com'
+
+/**
+ * `owner/name` → `https://codeload.github.com/owner/name/tar.gz/<sha>`。
+ *
+ * 用 SHA 而不是 tag：tag 可以被移动（本仓发版时确实 `git tag -f` 过），
+ * 而 SHA 指向的字节是固定的——这正是「装的东西可复现」的前提。
+ */
+function codeloadUrl(slug, sha) {
+  return `${CODELOAD_BASE}/${slug}/tar.gz/${sha}`
+}
+
 /** pnpm 命令的超时：装包要联网，给足 5 分钟。 */
 const PNPM_TIMEOUT_MS = 300000
 
@@ -50,13 +98,82 @@ const PNPM_TIMEOUT_MS = 300000
 const KEEP_BACKUPS = 3
 
 function parseArgs(argv) {
-  const out = { profile: '', tag: '', expectVersion: '', result: '', pnpm: '', dryRun: false }
+  const out = { profile: '', tag: '', sha: '', expectVersion: '', result: '', pnpm: '', dryRun: false }
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i]
     const value = argv[i + 1]
-    if (key === '--profile') { out.profile = String(value ?? ''); i += 1 } else if (key === '--tag') { out.tag = String(value ?? ''); i += 1 } else if (key === '--expect-version') { out.expectVersion = String(value ?? ''); i += 1 } else if (key === '--result') { out.result = String(value ?? ''); i += 1 } else if (key === '--pnpm') { out.pnpm = String(value ?? ''); i += 1 } else if (key === '--dry-run') { out.dryRun = true }
+    if (key === '--profile') { out.profile = String(value ?? ''); i += 1 } else if (key === '--tag') { out.tag = String(value ?? ''); i += 1 } else if (key === '--sha') { out.sha = String(value ?? ''); i += 1 } else if (key === '--expect-version') { out.expectVersion = String(value ?? ''); i += 1 } else if (key === '--result') { out.result = String(value ?? ''); i += 1 } else if (key === '--pnpm') { out.pnpm = String(value ?? ''); i += 1 } else if (key === '--dry-run') { out.dryRun = true }
   }
   return out
+}
+
+/**
+ * 把一个 tag 解析成 commit SHA（走 `api.github.com`，**实测可达**）。
+ *
+ * 解析不出来返回空串（调用方据此回退），**不抛错**——脚本的任何异常都不该
+ * 让 profile 停在半装状态。
+ *
+ * 两种 tag 都要处理：轻量 tag 的 `object.type` 是 `commit`；
+ * 附注 tag 是 `tag`，要再请求一次 `object.url` 才拿到真正的 commit。
+ * 本仓用的是轻量 tag，但别人 clone 后可能打附注 tag，所以两条都走。
+ */
+async function resolveTagSha(tag) {
+  const ref = `https://api.github.com/repos/${REPO_SLUG}/git/refs/tags/${encodeURIComponent(tag)}`
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'dsh-puzzle-mode-updater',
+    // 公开仓库匿名可读；有 token 就带上（提高配额、避免被限流）。
+    ...(githubToken() === '' ? {} : { Authorization: `token ${githubToken()}` }),
+  }
+  const first = await httpJson(ref, headers)
+  if (first.ok !== true) return ''
+  const object = first.json !== null && typeof first.json === 'object' ? first.json.object : null
+  if (object === null || typeof object !== 'object') return ''
+  const sha = typeof object.sha === 'string' ? object.sha : ''
+  if (object.type === 'commit') return sha
+  if (object.type === 'tag' && typeof object.url === 'string' && object.url !== '') {
+    const second = await httpJson(object.url, headers)
+    if (second.ok !== true) return ''
+    const target = second.json !== null && typeof second.json === 'object' ? second.json.object : null
+    return target !== null && typeof target === 'object' && typeof target.sha === 'string' ? target.sha : ''
+  }
+  return ''
+}
+
+/**
+ * 读 GitHub token（可选）。
+ *
+ * 位置与插件的 `githubToken()` 一致，但这里**独立实现**：本脚本要能在
+ * 插件被装坏时照常跑，不能 import 插件的代码。
+ * 读不到就返回空串——匿名也能读公开仓库，只是配额低。
+ */
+function githubToken() {
+  const home = process.env.DSH_HOME !== undefined && process.env.DSH_HOME !== '' ? process.env.DSH_HOME : join(homedir(), '.dsh')
+  for (const file of [join(home, '.github-token'), join(homedir(), '.dsh', '.github-token')]) {
+    try {
+      const text = readFileSync(file, 'utf8').trim()
+      if (text !== '') return text
+    } catch (_error) {
+      /* 读不到就试下一个 */
+    }
+  }
+  return ''
+}
+
+/**
+ * 发一个 GET 并解析 JSON。**不抛错**，失败返回 `{ ok: false, error }`。
+ *
+ * 用全局 `fetch`（Node 18+ 自带，本机 v24）。这个脚本只在本机跑，
+ * 而「本机有 Node」是它存在的前提——不必为更老的环境做兼容。
+ */
+async function httpJson(url, headers) {
+  try {
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(20000) })
+    if (response.ok !== true) return { ok: false, error: `HTTP ${response.status}` }
+    return { ok: true, json: await response.json() }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
 }
 
 /** 时间戳：用于备份目录名与结果文件。 */
@@ -225,12 +342,29 @@ function declaredSpec(profile) {
 }
 
 /** 装成功了吗：三条判据（见文件头）。返回 `{ ok, checks }`。 */
-function verifyInstall(profile, tag, expectVersion) {
+function verifyInstall(profile, tag, expectVersion, sha) {
   const checks = []
 
+  /**
+   * 判据一：依赖声明指向**这次要装的那一版**。
+   *
+   * ## ⚠️ 判据从「含 tag」改成「含 SHA」（v1.1.1 实测踩到）
+   *
+   * 改成 codeload 的 SHA 版 URL 之后，声明里**不再有 tag**——于是这条自检
+   * 把一次**成功**的安装判成了失败（实测：`pnpm add` 通过、版本号也对，
+   * 却被这条拦下并回退）。
+   *
+   * 判据的**本意**没变：确认「装的是这次要装的那一版」。
+   * 而 SHA 比 tag 更精确地表达了这件事——tag 可以被移动（本仓发版时确实
+   * `git tag -f` 过），SHA 不能。所以：有 SHA 就认 SHA，没给 SHA 才退回认 tag。
+   */
   const spec = declaredSpec(profile)
-  const specOk = spec.includes(tag)
-  checks.push({ name: '依赖声明已指向新版', ok: specOk, detail: spec || '(没有这条依赖)' })
+  const specOk = sha !== '' ? spec.includes(sha) : spec.includes(tag)
+  checks.push({
+    name: sha !== '' ? '依赖声明已指向这次的 commit' : '依赖声明已指向新版',
+    ok: specOk,
+    detail: spec || '(没有这条依赖)',
+  })
 
   const version = installedVersion(profile)
   /**
@@ -265,7 +399,7 @@ function verifyInstall(profile, tag, expectVersion) {
   return { ok: checks.every((one) => one.ok), checks }
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2))
   const startedAt = new Date().toISOString()
   const resultPath = args.result !== '' ? args.result : join(updatesRoot(), 'last-run.json')
@@ -343,18 +477,60 @@ function main() {
   // ---- 装 ----
   const pnpm = findPnpm(args.pnpm)
   const inv = pnpmInvocation(pnpm)
-  const spec = `${PACKAGE_NAME}@github:liancha22/dsh-puzzle-mode#${args.tag}`
+
+  /**
+   * ① **先在插件侧把 tag 解析成 SHA**（走 `api.github.com`，实测可达）。
+   *
+   * 这一步就是 pnpm 自己做不到的那一步——它要用 `github.com` 做 `git ls-remote`，
+   * 而本机 `github.com:443` 不通（实测 21 秒后超时）。
+   * 详见 `CODELOAD_BASE` 上方那张可达性表。
+   *
+   * `--sha` 允许调用方直接给（插件已经解析过，就不必再解析一次）；
+   * 没给才在这里解析——这样「面板拿到 SHA → 传给安装器」与
+   * 「命令行直接跑安装器」两条路都能走。
+   */
+  const sha = args.sha !== '' ? args.sha : await resolveTagSha(args.tag)
+  if (sha === '') {
+    const back = rollback(`解析 tag ${args.tag} 失败（api.github.com 不可达或这个 tag 不存在）`)
+    writeResult(resultPath, {
+      ok: false, stage: 'resolve', error: back.reason, rolledBack: true, rollback: back,
+      startedAt, finishedAt: new Date().toISOString(), profile, tag: args.tag,
+      backupDir, backedUp, beforeSpec, beforeVersion,
+    })
+    console.error(`[更新失败] ${back.reason} —— 已回退`)
+    process.exit(1)
+    return
+  }
+
+  /**
+   * ② 用 **SHA 版的 codeload URL** 装——这一步 pnpm 不必碰 `github.com`。
+   *
+   * 形状与 pnpm 自己写进锁文件的一模一样（实测本机锁文件就是
+   * `https://codeload.github.com/.../tar.gz/<sha>`），所以装完
+   * `package.json` / 锁文件的形状不变，回退与后续升级都不受影响。
+   */
+  const spec = `${PACKAGE_NAME}@${codeloadUrl(REPO_SLUG, sha)}`
   const installArgs = [...inv.prefix, 'add', spec]
-  // 进入「正在装」阶段：pnpm 解析 git tag 可能要一两分钟，这一段最需要让面板看得见。
+  // 进入「正在装」阶段：pnpm 要下载并解包，这一段最需要让面板看得见。
   writeRunning(resultPath, {
     profile, tag: args.tag, expectVersion: args.expectVersion,
-    beforeSpec, beforeVersion, backupDir, phase: 'install', spec, pnpm: pnpm.path,
+    beforeSpec, beforeVersion, backupDir, phase: 'install', spec, sha, pnpm: pnpm.path,
   })
   const installed = run(inv.command, installArgs, { cwd: profile, shell: inv.shell })
   const installLog = `${installed.stdout}\n${installed.stderr}`.trim()
 
   if (installed.ok !== true) {
-    const back = rollback(`pnpm add 退出码 ${installed.code}${installed.error ? '（' + installed.error + '）' : ''}`)
+    /**
+     * 失败原因要把**协议**与**日志尾巴**一起带上。
+     *
+     * 第一版只写「pnpm add 退出码 1」——用户看到的是一句无信息量的话，
+     * 而真正的死因（`Host key verification failed`）躺在 4000 字符的日志里。
+     * 失败信息的第一职责是**让人知道下一步该干什么**。
+     */
+    const tail = installLog.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+    const hint = tail.find((line) => /Host key|Could not read from remote|Permission denied|not found|ETIMEDOUT|ENOTFOUND/i.test(line))
+      ?? tail.slice(-1)[0] ?? ''
+    const back = rollback(`pnpm add 退出码 ${installed.code}${installed.error ? '（' + installed.error + '）' : ''}${hint ? '：' + hint.slice(0, 200) : ''}`)
     writeResult(resultPath, {
       ok: false, stage: 'install', error: back.reason, rolledBack: true, rollback: back,
       startedAt, finishedAt: new Date().toISOString(), profile, tag: args.tag,
@@ -367,7 +543,7 @@ function main() {
   }
 
   // ---- 验 ----
-  const verified = verifyInstall(profile, args.tag, args.expectVersion)
+  const verified = verifyInstall(profile, args.tag, args.expectVersion, sha)
   if (verified.ok !== true) {
     const failedNames = verified.checks.filter((one) => one.ok !== true).map((one) => one.name).join('、')
     const back = rollback(`装完自检没过：${failedNames}`)
@@ -394,4 +570,31 @@ function main() {
   console.log(`[更新成功] v${beforeVersion} → v${afterVersion}（备份留在 ${backupDir}）`)
 }
 
-main()
+/**
+ * 起主流程，并把**任何**异常兜住。
+ *
+ * `main()` 是 async（要 `await fetch` 解析 tag），所以末尾那句 `main()` 返回的是
+ * Promise——不接 `.catch` 的话，抛出的异常会变成**未处理的 rejection**：
+ * Node 默认打一行警告就退出（退出码 0），于是面板看到的「进程结束」是「成功」，
+ * 而结果文件里什么都没写 → **面板永远转圈**。
+ *
+ * 兜底动作与失败路径一致：**把失败写进结果文件**。这里不重试回退——
+ * 能走到这里说明异常发生在 `main()` 的某处，而回退逻辑自己也在 `main()` 里，
+ * 状态已经不可信；此时最该做的是让用户**看见**出了什么事，而不是猜着去改盘。
+ */
+main().catch((error) => {
+  const message = String(error && error.message ? error.message : error)
+  try {
+    const args = parseArgs(process.argv.slice(2))
+    const resultPath = args.result !== '' ? args.result : join(updatesRoot(), 'last-run.json')
+    writeResult(resultPath, {
+      ok: false, stage: 'crash', error: `安装器内部错误：${message}`, rolledBack: false,
+      finishedAt: new Date().toISOString(),
+      hint: '这是安装器自身的缺陷，不是你操作的问题。插件应该还可用；若不可用，用 backup-* 目录手工恢复。',
+    })
+  } catch (_writeError) {
+    /* 结果文件都写不出去：只能靠 stderr 了 */
+  }
+  console.error(`[更新失败] 安装器内部错误：${message}`)
+  process.exit(1)
+})
