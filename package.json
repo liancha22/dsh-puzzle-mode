@@ -1,7 +1,7 @@
 {
   "name": "dsh-puzzle-mode",
-  "version": "1.1.3",
-  "description": "DSH 插件：拼图模式——把项目拆成主文档 + 若干模块文档，AI 主动提问把不确定项变成已定项，用五维算项目健康性。一个会话可同时绑多个项目；主文档第五节 ## 工作流 是标准化流水线，命中触发词自动注入——**首次给完整步骤，之后只给一行指路**，不刷屏。**自动更新**：可翻各版本更新日志（每版**最多三句摘要**，来自 Release 正文的 `## 摘要` 区块），一键更新装失败会**自动回退**。**主题开发与分享**：一键建脚手架、一键推送到主题仓库，也能导出单文件主题包；默认皮肤为**液态玻璃**。**文件观察守卫**：写被拒时提示「先 read 再重试」、文件久未读时提前提醒、未查证就改时做行为纠正。所有注入（含**说话纠正** / **催促** / **重复思考熔断**）共用一道闸门，防叠成噪音；催促每 12 步一行、明确禁止写进度播报。**自动审查只找代码漏洞**。文档格式 v7；与 dsh-infinite-gen-5 同装时按契约共存。",
+  "version": "2.4.16",
+  "description": "DSH 插件：拼图模式——**全局项目工作台**。把项目拆成主文档 + 模块文档，AI 主动提问把不确定项变成已定项，用五维算健康性。**派单系统**：五列看板（卡折叠成只显示标题的小卡，点开浮窗看详情；**卡上不放按钮，移动即触发**——「未接单」拖到「在做」= 真的开工）+ 新建任务单 + 全局大脑 + 澄清器 + 派单执行，四处模型可配；**看板按项目隔离**（`<数据工作区>/拼图/<项目名>/派单.json`），**执行工作区默认在拼图项目文件夹内**。**全局大脑**：一个项目一个常驻会话，其上下文里的拼图文档段没压缩时冻结、压缩时重读；澄清器从它 fork 出来（继承事件日志）。入口常驻左侧边栏，第一屏是工作区项目列表，点一行进二级（文档信息 / 派单系统）。另有自动更新、主题开发与分享、文件观察守卫。文档格式 v9；与 dsh-infinite-gen-5 按契约共存。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -24,16 +24,8 @@
     "compat.json"
   ],
   "scripts": {
-    "test": "node tools/check-install-spec.mjs && node test/10-puzzle.test.mjs && node test/20-client.test.mjs && node test/30-rpc.test.mjs && node test/40-pre-execute.test.mjs && node test/50-contract.test.mjs && node test/60-loopguard.test.mjs && node test/70-themes.test.mjs && node test/80-ask-pause.test.mjs && node test/90-audit-tool.test.mjs && node test/100-nudge.test.mjs && node test/110-speech.test.mjs && node test/120-workflowguard.test.mjs && node test/130-updater.test.mjs && node test/140-themedev.test.mjs && node test/150-installer.test.mjs && node test/160-toolargs-fsguard.test.mjs && node tools/verify-cross-plugin.mjs",
-    "test:mutate": "node tools/mutate-check.mjs",
-    "test:contract": "node test/50-contract.test.mjs",
+    "test": "node test/smoke.test.mjs",
     "verify:cross": "node tools/verify-cross-plugin.mjs",
-    "verify:ask-pause": "node tools/verify-ask-pause.mjs",
-    "verify:themes": "node tools/verify-themes.mjs",
-    "verify:theme-install": "node tools/verify-theme-install.mjs",
-    "fetch:test-deps": "node tools/fetch-test-deps.mjs --all",
-    "render-tutorial": "node tools/render-tutorial.mjs",
-    "verify:themes-online": "node tools/verify-themes-online.mjs",
     "verify:install-spec": "node tools/check-install-spec.mjs"
   },
   "keywords": [

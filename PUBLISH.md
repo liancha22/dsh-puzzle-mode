@@ -4,11 +4,11 @@
 
 ## 0. 状态
 
-| 项 | 现状（2026-10-09） |
+| 项 | 现状（2026-10-13） |
 | --- | --- |
 | 仓库 | <https://github.com/liancha22/dsh-puzzle-mode>（public） |
 | 主题仓库 | <https://github.com/liancha22/dsh-puzzle-themes>（**新增**；主题不随插件打包，点一下从它下载） |
-| 版本 | v1.1.3（更新日志改成「简短三句」：摘要只认 Release 正文里的 `## 摘要` 区块，没写就明说「这版没写摘要」，不再取正文前 3 行；最近三版的正文已改短） |
+| 版本 | v2.1.0（**派单真的接上了**：`开始澄清` / `派出去` 两颗按钮不再置灰——走 `sessionController.create` → `resolveAgent` → `goals.create` → `prompt` 三跳，全在进程内、不需要 Remote 端点；澄清器是固定的「全局大脑」，带主文档全文与模块索引） |
 | --- | --- |
 | `github:owner/repo#tag` | `git+ssh://` → `Host key verification failed` |
 | `git+https://github.com/…#tag` | `Failed to connect to github.com:443 after 21119 ms` |
