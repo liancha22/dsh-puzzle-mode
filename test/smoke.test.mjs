@@ -334,6 +334,24 @@ try {
     })
 
     /**
+     * **澄清器不许把文档活写进执行交代**（v2.4.20 真机 bug）。
+     *
+     * 真机证据：卡 `task-0001` 的第 7 步写着「回写拼图文档（走 puzzle_mode）」，
+     * 而 v2.4.15 起执行会话**没有** `puzzle_mode`——那一步必然撞文档锁。
+     *
+     * 根因不在执行侧，在澄清侧：它自己的系统提示说「你的结论要落回文档」，
+     * 却没被告知「执行会话写不了文档」，于是把回写当成执行交代的一部分。
+     * 所以这条钉的是**澄清器的两份提示词都得说清分工**。
+     */
+    check('澄清器：必须说清「执行会话写不了文档」，别把回写写进执行交代', () => {
+      const sys = barrel.CLARIFIER_SYSTEM
+      assert.ok(sys.includes('执行会话不能写文档'), '系统提示必须点明执行会话没有文档工具')
+      assert.ok(sys.includes('全局大脑'), '必须说清文档由全局大脑回写')
+      const body = barrel.clarifierPromptOf({ request: 'REQ_SENTINEL', hasWriter: true })
+      assert.ok(body.includes('不要') && body.includes('回写拼图文档'), '首轮消息必须警告不许写回写步骤')
+    })
+
+    /**
      * **冻结链路**（v2.3.0，待办 B）。
      *
      * 补的洞：`plan.frozenAt` 原先**没有任何写入点**（澄清器按拍板不自己冻结，
