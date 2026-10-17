@@ -12,7 +12,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，在面板主题页点一下从仓库下）
-- 最新版：**v2.4.18** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v2.4.19** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：`@deepseek-ai/cordis ^4.0.1`、`@deepseek-ai/dsh-tools ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`（照 `package.json` 的 `peerDependencies` 照抄；这是**声明范围**，不是逐版本实测清单）
 - **面板逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 - 整份一图流：[`.github/images/ui-tutorial.png`](.github/images/ui-tutorial.png)
@@ -29,6 +29,18 @@
 ---
 
 ## 最新版本
+
+### v2.4.19 · 修「过期安装记录冒充刚刚失败」
+
+> 真机现象：更新页顶部红条写「更新失败，**已自动回退**到 v1.1.2」，下面又写「已经是最近版本 v2.4.18」——两句自相矛盾。
+
+**不是发癫**。查下来那条红条来自 `last-run.json` 里 **8 天前**一次失败的记录（装 v1.1.3 时 codeload 下载超时，安装器按设计回退了，行为正确）。问题在**面板怎么显示它**：渲染时只判「有没有内容」，**完全不看这条记录有多旧**，于是历史失败永远冒充「刚刚」。
+
+**修法**：以 `finishedAt` 为准，只有 24 小时内的才算「当前这次」；过期记录降级成一句灰色历史说明（改成过去时，并明说「当前不受影响」），而不是删掉——「上次为什么没装上」是有用信息，只是不该冒充现在。
+
+**一个刻意的保守选择**：`finishedAt` 缺失或解析不出来时**算新鲜**。老版本安装器写的记录没有这个字段，若判成过期，一次**真实的失败**就会被藏掉——**藏掉失败比多显示一次失败危险得多**。
+
+**顺带说明**：真机上「面板点不了」的真因不是 v2.4.17 的回归，而是那份 profile 里装的**一直是 v1.1.2**（依赖钉在提交 `8451e7f6`），我改的 v2.4.17/v2.4.18 从未被装进去。v2.4.18 的修复仍然必要（那个回归真实存在），但要装上去才生效。
 
 ### v2.4.18 · 修「面板点不了」
 
@@ -453,7 +465,7 @@
 **方式一 · 插件管理器（推荐）**
 
 ```bash
-python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v2.4.18
+python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode v2.4.19
 ```
 
 App 的插件页「添加插件」用的就是它，也支持标签 / 分支 / 子目录：
@@ -464,7 +476,7 @@ python3 "$DSH_HOME/plugin-manager.py" github liancha22 dsh-puzzle-mode main/lib
 
 **方式二 · 直接下载附件**
 
-[dsh-puzzle-mode-2.4.18.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v2.4.18/dsh-puzzle-mode-2.4.18.tgz)
+[dsh-puzzle-mode-2.4.19.tgz](https://github.com/liancha22/dsh-puzzle-mode/releases/download/v2.4.19/dsh-puzzle-mode-2.4.19.tgz)
 （含全部源码，可以用插件管理器的 `import` 装本地压缩包）
 
 **方式三 · dsh CLI**

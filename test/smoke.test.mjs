@@ -1290,6 +1290,101 @@ try {
     )
   })
 
+  /* ---------- ⑪ 过期的安装记录不能冒充「刚刚失败」（v2.4.19） ---------- */
+  /**
+   * ## 为什么这条必须进冒烟：它让用户以为插件「发癫」
+   *
+   * 真机现象：更新页顶部红条写着「更新失败，**已自动回退**到 v1.1.2」，
+   * 下面又写着「已经是最近版本 v2.4.18」——两句自相矛盾。
+   *
+   * 查下来：那条红条来自 `last-run.json` 里**8 天前**一次失败的记录
+   * （v1.1.3 安装时 codeload 下载超时）。面板渲染时只判 `stage !== ''`，
+   * **完全不看这条记录有多旧**，于是一条历史失败永远挂在那里冒充「刚刚」。
+   *
+   * 这条钉两件事：
+   *   ① `runIsCurrent` 真的按时间窗判新鲜度（而且缺失/坏值算新鲜，
+   *      **绝不因为字段问题藏掉一次真实失败**）；
+   *   ② 渲染处必须**用它**——不然判据写了也白写。
+   */
+  check('更新页：过期的安装记录必须降级成历史说明，不能冒充「刚刚失败」', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    let bundle = null
+    new Function('window', 'document', 'fetch', src)(
+      {
+        __ModuleLoader__: { load(d) { bundle = d } },
+        matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+        addEventListener() {}, removeEventListener() {}, confirm: () => false, setTimeout, clearTimeout,
+        innerWidth: 1200, innerHeight: 800,
+      },
+      { createElement: () => ({ setAttribute() {}, textContent: '', style: {} }), head: { appendChild() {} }, body: {} },
+      () => Promise.resolve({ json: () => Promise.resolve({ ok: true, result: {} }) }),
+    )
+    const ui = bundle.factory((n) => {
+      if (n === 'react') return { createElement: () => null, useState: (v) => [v, () => {}], useEffect() {}, useMemo: (f) => f(), useRef: (v) => ({ current: v }), useCallback: (f) => f, Fragment: 'f' }
+      throw new Error('unexpected require: ' + n)
+    })
+    assert.equal(typeof ui.runIsCurrent, 'function', 'runIsCurrent 必须导出（便于直接驱动）')
+    assert.equal(typeof ui.staleRunNotice, 'function', 'staleRunNotice 必须导出')
+
+    const now = Date.now()
+    const hoursAgo = (h) => new Date(now - h * 3600 * 1000).toISOString()
+
+    // ① 刚结束的（1 小时前）：算当前。
+    assert.equal(ui.runIsCurrent({ stage: 'install', ok: false, finishedAt: hoursAgo(1) }), true, '1 小时前的记录算当前')
+    // ② 8 天前（正是真机上那条）：**不算**当前。
+    assert.equal(ui.runIsCurrent({ stage: 'install', ok: false, finishedAt: hoursAgo(8 * 24) }), false, '8 天前的记录不能算当前')
+    // ③ 边界：23 小时算、25 小时不算。
+    assert.equal(ui.runIsCurrent({ finishedAt: hoursAgo(23) }), true, '23 小时前算当前')
+    assert.equal(ui.runIsCurrent({ finishedAt: hoursAgo(25) }), false, '25 小时前不算当前')
+    /**
+     * ④ **缺失 / 坏值算新鲜**——这是刻意的保守方向。
+     *
+     * 老版本安装器写的记录里没有 `finishedAt`。若把「没有字段」判成过期，
+     * 一次**真实的失败**就会被藏掉；而藏掉失败比多显示一次失败危险得多。
+     */
+    assert.equal(ui.runIsCurrent({ stage: 'install', ok: false }), true, '没有 finishedAt 时必须算新鲜（不能藏掉真实失败）')
+    assert.equal(ui.runIsCurrent({ finishedAt: '不是时间' }), true, 'finishedAt 解析不出来时算新鲜')
+    // ⑤ 时钟错乱（未来时间）也算新鲜。
+    assert.equal(ui.runIsCurrent({ finishedAt: hoursAgo(-5) }), true, '未来时间算新鲜（不因时钟问题藏掉失败）')
+    // ⑥ 正在跑的一律算当前。
+    assert.equal(ui.runIsCurrent({ running: true }), true, 'running 一律算当前')
+
+    /**
+     * ⑦ 过期说明必须是**过去时**，且不能再说「已自动回退」。
+     *
+     * 「已自动回退」是现在时陈述——用户读到会以为**现在**处于回退状态。
+     * 过期记录应该说「那次更新失败，插件已回退到原版本（当前不受影响）」。
+     */
+    const stale = ui.staleRunNotice({
+      stage: 'install', ok: false, rolledBack: true, error: 'pnpm add 退出码 1',
+      beforeVersion: '1.1.2', finishedAt: hoursAgo(8 * 24),
+    })
+    assert.ok(typeof stale === 'string' && stale !== '', '过期记录必须给一句说明（不能静默丢弃）')
+    assert.ok(stale.includes('那次'), '过期说明必须是过去时（「那次更新失败」）')
+    assert.ok(stale.includes('当前不受影响'), '必须明确告诉用户当前状态是好的')
+    assert.ok(!/已自动回退/.test(stale), '过期说明不能再用现在时的「已自动回退」（会让用户以为现在还坏着）')
+    assert.ok(stale.includes('pnpm add'), '必须带上原始失败原因（那是用户想知道的信息）')
+
+    /**
+     * ⑧ 渲染处必须**真的用了** `runIsCurrent`。
+     *
+     * 判据函数写对了但渲染不调用，等于没修。这条是负控：
+     * 把 `runCurrent &&` 摘掉就会红。
+     */
+    assert.ok(
+      /var runCurrent = runIsCurrent\(run\)/.test(src),
+      '渲染处必须先算 runCurrent（不能只判 stage）',
+    )
+    assert.ok(
+      /if \(runCurrent && run !== null[\s\S]{0,120}?run\.stage !== 'dry-run'\)/.test(src),
+      '「本次结果」分支必须由 runCurrent 门控（否则过期记录会冒充刚刚失败）',
+    )
+    assert.ok(
+      /staleRunNotice\(run\)/.test(src),
+      '过期记录必须走 staleRunNotice（降级成历史说明，而不是删掉）',
+    )
+  })
+
   check('动效：卡片跨列飞行量的是「旧位置减新位置」，且量不到起点不编假动画', () => {
     const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
     /**
