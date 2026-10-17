@@ -1111,6 +1111,344 @@ try {
     assert.equal(board4.cards[0].history.length, 0, '不该留下一条「已做 → 已做」的空历史')
   })
 
+  /* ---------- ⑨ 动效（v2.4.17） ---------- */
+  /**
+   * ## 为什么动效也要进冒烟
+   *
+   * 动效最容易「静默失效」：类名拼错、CSS 规则被覆盖、行内样式压掉过渡、
+   * `transform` 被两条规则争用——**这些全都不报错**，页面照常能用，
+   * 只是那一处动画从来没播过。本仓在 `flipList` 上就踩过一次：
+   * 行内 `transition:none` 把类里的过渡整个压掉，**FLIP 从加进来那天起
+   * 一次都没播过**，而它退化得极其安静（行还是会移动，只是没有过程）。
+   *
+   * 所以下面每条都钉「只可能由正确实现产生」的量：
+   *   - 过渡必须写在**类**里（行内会被覆盖）；
+   *   - 「不要过渡」必须是**类**而不是行内 `transition`；
+   *   - 方向必须**由导航意图给出**，不由目标页推；
+   *   - 数字爬升的每个中间值都必须在真实区间内（读数不能中途说谎）。
+   */
+  check('动效：FLIP 的过渡写在类里，且「本帧不过渡」用类而不是行内样式', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    /**
+     * ① 过渡必须在类里。行内 `transition` 会**永久**留在元素上（没人清它），
+     * 于是把类里的过渡压掉——那就是 FLIP 从未播放的根因。
+     */
+    assert.ok(
+      /\.dshpz-flip\{transition:transform var\(--dshpz-dur-slow\)/.test(src),
+      '.dshpz-flip 必须用令牌给 transition（过渡要在类里，不能在行内）',
+    )
+    assert.ok(
+      /\.dshpz-cardtravel\{[^}]*transition:transform var\(--dshpz-dur-slow\)/.test(src),
+      '.dshpz-cardtravel 必须用令牌给 transition',
+    )
+    /**
+     * ② 「本帧不要过渡」必须是**类**。用行内 `transition:none` 会一直留着，
+     * 把后面挂的类过渡压掉——这是那条真 bug 的形状。
+     */
+    assert.ok(
+      /\.dshpz-move-off\{transition:none!important\}/.test(src),
+      '必须有 .dshpz-move-off 这个「本帧不过渡」的类（行内 transition 会压掉类过渡）',
+    )
+    /**
+     * ③ 反向断言：`flipList` 与 `travelCard` 里**不许**再出现
+     * `style.transition = 'none'`。这条是负控——把 bug 写回去就必须红。
+     *
+     * ⚠️ 必须先**剥掉注释**再查：本次修复的注释里**引用了**那行旧代码
+     * （「原先写的是 `node.style.transition = 'none'`」），不剥的话
+     * 这条负控会因为它自己的说明文字而红——那是假警报。
+     * 剥注释的写法：按行去掉 `//` 之后的部分与整行 `*` 注释。
+     */
+    const codeOnly = src
+      .split('\n')
+      .filter((line) => !/^\s*\*/.test(line) && !/^\s*\/\*/.test(line))
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n')
+    const badInline = codeOnly.match(/\.style\.transition\s*=\s*['"]none['"]/g)
+    assert.equal(
+      badInline, null,
+      '不能用行内 transition:none 来「本帧不过渡」：行内优先级高于类，会把类里的过渡压掉（FLIP 从未播放的根因）',
+    )
+    /**
+     * ④ `dshpz-move-off` 必须在两个 FLIP 实现里都被**真的用上**。
+     * 光有这条 CSS 而没人挂它，等于什么都没修。
+     */
+    assert.ok(
+      (src.match(/classList\.add\('dshpz-move-off'\)/g) || []).length >= 2,
+      'flipList 与 travelCard 都必须真的挂 .dshpz-move-off（两个 FLIP 实现）',
+    )
+  })
+
+  check('动效：换页方向由导航意图给出，同一目标页可以是前进也可以是后退', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    /**
+     * `switchToView` 里必须**按三页的排列顺序**算方向（项目 → 主题 → 更新）。
+     *
+     * 为什么要钉这个：如果改成「按目标页推方向」（比如 `theme` 就前进、
+     * `projects` 就后退），那么「主题 → 项目」与「更新 → 项目」都对了，
+     * 但「项目 → 主题」与「项目 → 更新」也对了……看起来都对。
+     * 真正会错的是**同页重复点击**与**二级页进入**——而那些恰恰是
+     * 用户最容易觉得「怪但说不清」的地方。所以判据必须是**位置差**。
+     */
+    assert.ok(
+      /var ORDER = \['projects', 'theme', 'update'\]/.test(src),
+      'switchToView 必须按三页排列顺序算方向（位置差），不能按目标页硬编码',
+    )
+    assert.ok(
+      /dir = to > from \? 1 : -1/.test(src),
+      '方向必须由「目标位置 > 当前位置」得出',
+    )
+    /**
+     * 方向为 0（同页）时**不能** +1 序号：那会让页面无故重建、闪一下，
+     * 而用户其实什么都没做。
+     */
+    assert.ok(
+      /if \(dir !== 0\) patch\.navSeq = \(state\.navSeq \|\| 0\) \+ 1/.test(src),
+      '同一页重复点击不该 +1 导航序号（否则会无故重播转场）',
+    )
+    /**
+     * 「返回」类入口必须显式给 `navDir: -1`：它们是后退语义，
+     * 而 `switchToView` 算不出来（那个函数管的是三页之间的左右关系）。
+     * 至少要有：主题页返回、更新页返回、Esc 回退、二级页返回。
+     */
+    const backSites = src.match(/navDir: -1/g) || []
+    assert.ok(
+      backSites.length >= 4,
+      '「返回」类入口（主题页 / 更新页 / Esc / 二级页）都必须显式给 navDir:-1，实际只有 ' + backSites.length + ' 处',
+    )
+    /**
+     * 进二级页 = 前进（往右走）。
+     */
+    assert.ok(
+      /view: 'project',\s*\n\s*tab: state\.tab \|\| 'info'/.test(src) && src.includes('navDir: 1'),
+      '进二级页必须给 navDir:1（往右走）',
+    )
+  })
+
+  /* ---------- ⑩ 换页锁必须能解开（v2.4.18 修「面板点不了」） ---------- */
+  /**
+   * ## 为什么这条必须进冒烟：它是一条**永久锁死面板**的规则
+   *
+   * `data-nav` 非 0 时 CSS 会给整页 `pointer-events:none`（换页那 200ms 锁点击，
+   * 防止点错相邻按钮）。而第一版**从来没有把 `navDir` 复位过**——
+   * 它只在导航时被设成 ±1，此后一直是 ±1。
+   *
+   * 结果：打开面板还能点（那时是初始的 0），**一旦切过页，整个面板就再也
+   * 点不动了**——看得见、一个按钮都点不了、不报任何错。
+   *
+   * ## 为什么原有测试全绿却没抓到
+   *
+   * 上面那条「换页方向」的测试只断言**导航时必须给 navDir**（钉了「写」），
+   * 没断言**它必须被复位**（没钉「清」）。一个状态有「进入」没有「退出」时，
+   * 只看进入的断言必然全绿。这类漏网很典型，所以补下面三条。
+   */
+  check('动效：换页锁（pointer-events）必须能被解开，否则整个面板永久点不了', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+
+    /**
+     * ① 前置事实：CSS 里确实有一条「data-nav 非 0 就锁点击」的规则。
+     *
+     * 先钉住这个前提——如果哪天那条 CSS 被删了，下面两条「必须复位」的
+     * 断言就失去了意义（而测试会继续假装在保护什么）。
+     */
+    assert.ok(
+      /\.dshpz-page\[data-nav="1"\],\.dshpz-page\[data-nav="-1"\]\{pointer-events:none\}/.test(src),
+      '前提变了：CSS 里「换页锁点击」那条规则不见了。若是有意删除，这条测试要一起改',
+    )
+
+    /**
+     * ② 必须有**复位**：`onAnimationEnd` 里把 `navDir` 设回 0。
+     *
+     * 这是根治：状态回到 0，CSS 自然不再命中。
+     */
+    assert.ok(
+      /onAnimationEnd: function \(\) \{\s*\n\s*if \(state\.navDir !== 0\) setState\(\{ navDir: 0 \}\)/.test(src),
+      '换页容器必须有 onAnimationEnd 把 navDir 复位成 0（否则 pointer-events:none 永久生效，面板点不了）',
+    )
+
+    /**
+     * ③ 必须有**兜底定时器**：`animationend` 不保证会来。
+     *
+     * 至少两种情况：减少动效（CSS 把动画整个关掉 → 没有结束事件）、
+     * 老 WebView（动画被丢弃）。少了兜底，开着「减少动态效果」的用户
+     * 一进面板就废了。
+     */
+    assert.ok(
+      /if \(state\.navDir === 0\) return undefined[\s\S]{0,400}?setTimeout\(function \(\) \{[\s\S]{0,160}?navDir: 0/.test(src),
+      '必须有定时器兜底复位 navDir（减少动效下 animationend 不会来，没有兜底就永久锁死）',
+    )
+
+    /**
+     * ④ **负控**：`navDir` 在导航里被设成 ±1 的地方，必须都能被上面两条
+     * 复位路径覆盖。判据是「没有任何地方把 navDir 设成非 0 之后不依赖复位」
+     * ——这里用一条更硬的检查：`navDir: 0` 必须至少出现在两处
+     * （state 初值 + 复位点），否则说明复位被删了。
+     */
+    const resets = src.match(/navDir: 0/g) || []
+    assert.ok(
+      resets.length >= 3,
+      'navDir 复位点太少（' + resets.length + ' 处）：初值 + onAnimationEnd + 兜底定时器，至少三处',
+    )
+  })
+
+  check('动效：卡片跨列飞行量的是「旧位置减新位置」，且量不到起点不编假动画', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    /**
+     * 差值方向必须反着加：`from.left - box.left`。
+     *
+     * 这条**只可能由正确实现产生**：反了（`box.left - from.left`）会让卡
+     * 从更远的地方飞过来——错得很明显（会飞出看板），但它不报错，
+     * 只在真机上看得出。所以用源码断言钉住方向。
+     */
+    assert.ok(
+      /var dx = Number\(from\.left\) - box\.left/.test(src),
+      '飞行差值必须是「旧位置 - 新位置」（反了会让卡从错误方向飞过来）',
+    )
+    assert.ok(
+      /var dy = Number\(from\.top\) - box\.top/.test(src),
+      '纵向也要算：窄屏只有一列，换列表现为纵向位移',
+    )
+    /**
+     * 量不到起点时必须**不播**（返回 false），由 CSS 兜底成淡入。
+     * 编一个假起点（比如视口中心）比不做动画更糟。
+     */
+    assert.ok(
+      /if \(from === null \|\| from === undefined\) return false/.test(src),
+      '量不到起点必须降级（不能编假起点）',
+    )
+    /**
+     * 起点必须在**发请求之前**量：回包一到，卡已经在新列里了。
+     */
+    const moveAt = src.indexOf('function moveCard(')
+    const measureAt = src.indexOf('var flyFrom = null', moveAt)
+    const postAt = src.indexOf("post({ method: 'task', action: 'move'", moveAt)
+    assert.ok(
+      measureAt > moveAt && postAt > measureAt,
+      '飞行起点必须在发搬卡请求**之前**量（回包后旧位置已经不存在了）',
+    )
+    /**
+     * 有起点时**不能**再挂 `dshpz-cardfly`：那个兜底淡入会叠在飞行的位移上，
+     * 卡会一边飞一边半透明。
+     *
+     * 断言写成「`dshpz-cardfly` 的出现**必须**由 `flyFrom` 为空来门控」——
+     * 而不是钉死整行的字符（那样改个括号就会误红）。
+     */
+    const fallbackLine = src.split('\n').find((line) => line.includes("' dshpz-cardfly'"))
+    assert.ok(fallbackLine !== undefined, '必须保留「量不到起点」时的兜底淡入类')
+    assert.ok(
+      fallbackLine.includes('flyFrom === null') && fallbackLine.includes('flyFrom === undefined'),
+      '兜底淡入类必须由 flyFrom 为空门控（有起点时交给 travelCard，否则两者叠加）',
+    )
+  })
+
+  check('动效：数字爬升的每个中间值都在真实区间内（读数不能中途说谎）', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    let bundle = null
+    new Function('window', 'document', 'fetch', src)(
+      {
+        __ModuleLoader__: { load(d) { bundle = d } },
+        matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+        addEventListener() {}, removeEventListener() {}, confirm: () => false, setTimeout, clearTimeout,
+      },
+      { createElement: () => ({ setAttribute() {}, textContent: '', style: {} }), head: { appendChild() {} }, body: {} },
+      () => Promise.resolve({ json: () => Promise.resolve({ ok: true, result: {} }) }),
+    )
+    const ui = bundle.factory((n) => {
+      if (n === 'react') return { createElement: () => null, useState: (v) => [v, () => {}], useEffect() {}, useMemo: (f) => f(), useRef: (v) => ({ current: v }), useCallback: (f) => f, Fragment: 'f' }
+      throw new Error('unexpected require: ' + n)
+    })
+    assert.equal(typeof ui.countUpValue, 'function', '数字爬升的插值必须是可驱动的纯函数')
+
+    /**
+     * ① 端点：t=0 给起始值、t=1 给目标值。
+     */
+    assert.equal(ui.countUpValue(62, 78, 0), 62, 't=0 必须显示起始值')
+    assert.equal(ui.countUpValue(62, 78, 1), 78, 't=1 必须显示目标值')
+    /**
+     * ② **每一个中间值都必须在 [62, 78] 内**。
+     *
+     * 这是这条测试的核心：爬升的读数是业务值，中途出现 80 或 61 就是
+     * 「读数说了谎」——而它不会报错，用户只会觉得「这个数字怪怪的」。
+     * 逐点扫 0→1，越界立即失败。
+     */
+    for (let i = 0; i <= 100; i += 1) {
+      const v = ui.countUpValue(62, 78, i / 100)
+      assert.ok(v >= 62 && v <= 78, `t=${i / 100} 时读到 ${v}，超出 [62,78]（读数不能越界）`)
+      assert.equal(Number.isInteger(v), true, `t=${i / 100} 时读到 ${v}，必须是整数（半成品读数不可读）`)
+    }
+    /**
+     * ③ 单调不减：往上爬的过程里不能回头。
+     */
+    let prev = ui.countUpValue(62, 78, 0)
+    for (let i = 1; i <= 100; i += 1) {
+      const v = ui.countUpValue(62, 78, i / 100)
+      assert.ok(v >= prev, `t=${i / 100} 时读到 ${v} < 上一个值 ${prev}：爬升不能回头`)
+      prev = v
+    }
+    /**
+     * ④ 下降也对称（健康性会掉）。
+     */
+    assert.equal(ui.countUpValue(78, 62, 0), 78, '下降时 t=0 也要显示起始值')
+    assert.equal(ui.countUpValue(78, 62, 1), 62, '下降时 t=1 要显示目标值')
+    for (let i = 0; i <= 100; i += 1) {
+      const v = ui.countUpValue(78, 62, i / 100)
+      assert.ok(v >= 62 && v <= 78, `下降 t=${i / 100} 时读到 ${v}，超出 [62,78]`)
+    }
+    /**
+     * ⑤ `from === null`（首帧）直接给目标值：**首帧不爬**。
+     *
+     * 打开面板时从 0 爬到 62 是在演「它在增长」，而事实是这个数字一直都在
+     * ——那是伪造过程。
+     */
+    assert.equal(ui.countUpValue(null, 62, 0.3), 62, '首帧（没有起始值）必须直接给目标值，不能从 0 爬')
+    /**
+     * ⑥ 越界输入被夹紧：宿主万一给了 -5 或 120，读数不能显示成那样。
+     */
+    assert.equal(ui.countUpValue(0, 120, 1), 100, '目标值必须夹在 0–100')
+    assert.equal(ui.countUpValue(0, -5, 1), 0, '负目标值必须夹到 0')
+  })
+
+  check('动效：减少动效时 JS 动效一律直接落位（CSS 媒体查询管不到它们）', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    /**
+     * 三处 JS 动效（列表 FLIP / 卡跨列飞行 / 列落定脉冲）都必须先问 `motionOn()`。
+     *
+     * 为什么这条必须钉：CSS 的 `prefers-reduced-motion` 只作用于**样式表里的
+     * 动画与过渡**，而这三处是 JS 直接写 `transform` / 加类——
+     * 媒体查询对它们**完全无效**。漏一处就是「开了减少动效的用户仍被动效晃」。
+     */
+    const flipAt = src.indexOf('function flipList(')
+    assert.ok(
+      src.slice(flipAt, flipAt + 900).includes('!motionOn()'),
+      'flipList 必须先问 motionOn()（减少动效直接落位）',
+    )
+    const travelAt = src.indexOf('function travelCard(')
+    assert.ok(
+      src.slice(travelAt, travelAt + 1200).includes('if (motionOn()) return false'),
+      'travelCard 必须先问 motionOn()',
+    )
+    const landAt = src.indexOf('function landColumn(')
+    assert.ok(
+      src.slice(landAt, landAt + 600).includes('if (motionOn()) return false'),
+      'landColumn 必须先问 motionOn()',
+    )
+    /**
+     * 数字爬升同理（它由 rAF 逐帧写文本）。
+     */
+    const heroAt = src.indexOf('function HeroRing(')
+    assert.ok(
+      src.slice(heroAt, heroAt + 3000).includes('if (motionOn())'),
+      '数字爬升必须先问 motionOn()（减少动效直接落定）',
+    )
+    /**
+     * 拖拽时的微摇动由 `ghostGrab` 的第三个参数控制，那个参数必须来自 `motionOn()`。
+     * （这条是既有纪律，本次升级新增了「抬起」但没改摇动的判据，一并钉住。）
+     */
+    assert.ok(
+      /ghostGrab\([^)]*!motionOn\(\)\)/.test(src),
+      '微摇动必须由 motionOn() 决定（那张卡不在 .dshpz-scope 子树里，通配规则罩不到）',
+    )
+  })
+
   /* ---------- ⑧ RPC 路由必须 await 异步处理器 ---------- */
   /**
    * 为什么这条要进冒烟：路由里多数 handler 是 `async`，而**它们自己**
