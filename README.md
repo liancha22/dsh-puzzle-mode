@@ -12,8 +12,8 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，在面板主题页点一下从仓库下）
-- 最新版：**v2.4.19** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
-- 适配：`@deepseek-ai/cordis ^4.0.1`、`@deepseek-ai/dsh-tools ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || ^0.2.0-rc.1`（照 `package.json` 的 `peerDependencies` 照抄；这是**声明范围**，不是逐版本实测清单）
+- 最新版：**v2.4.21** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 适配：`@deepseek-ai/cordis ^4.0.1`；DSH 运行时 **`^0.2.2-rc.1`**（声明在 `engines.dsh`）。`peerDependencies` 里的 `@deepseek-ai/dsh-tools` 范围照抄自 `package.json`——那是兼容**声明**，不是逐版本实测清单
 - **面板逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 - 整份一图流：[`.github/images/ui-tutorial.png`](.github/images/ui-tutorial.png)
 
@@ -563,8 +563,13 @@ puzzle-style-diag applied=<真值> rules=<条数|null> inset=… color-mix=… b
 多半是 CSP 或别的插件清了样式）。
 
 **Q：装上了但提示不兼容 / 根本没生效？**
-先确认两件事：① 你的 DSH 版本落在上面写的 `peerDependencies` 范围里；
+先确认两件事：① 你的 DSH 运行时版本落在 `engines.dsh`（`^0.2.2-rc.1`）里——
+**从 0.2.2-rc.1 起，DSH 会在启动和每次重组时检查每个 bundle 的 DSH 要求，不满足的直接跳过（不报错、不崩，只是不加载）**；
 ② **重启过客户端**——这一版不重启不生效。
+
+> 排查提示：如果侧边栏没有「拼图」按钮，先看 profile 的 `package.json` 里
+> `dsh.profile.bundles` **有没有 `dsh-puzzle-mode`**。有依赖但不在 bundles 里，
+> 一样不会加载——两者不是一回事。
 
 ---
 

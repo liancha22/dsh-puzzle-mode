@@ -1,3 +1,96 @@
+### v2.4.21 · 适配 DSH 0.2.2-rc.1
+
+> 用户原话：「适配dsh新版本」
+
+#### 现象：插件整个不见了
+
+DSH 从 `0.2.1-rc.2` 升到 **`0.2.2-rc.1`** 之后，拼图面板消失——侧边栏没有按钮，
+`plugin_manager` 的 207 个 entry 里**一条拼图都没有**。
+
+#### 根因：DSH 的版本门禁把 bundle 跳过了
+
+新宿主对 **bundle 层**加了 DSH 要求校验，规则是（宿主原文）：
+
+> When the manifest declares `engines.dsh`, that range alone decides and
+> `peerDependencies` are ignored. Otherwise every `peerDependencies` range on
+> `@deepseek-ai/dsh` and `@deepseek-ai/dsh-*` must match.
+> **Prereleases participate in range matching.**
+
+我们的 manifest 只有 peer：
+
+```
+"@deepseek-ai/dsh-tools": "^0.1.5-alpha.1 || ... || ^0.2.0-rc.1"
+```
+
+而 `^0.2.0-rc.1` 按 semver 预发布规则**不覆盖 `0.2.2-rc.1`**——预发布版只有
+`[major,minor,patch]` 相同时才进 range，`0.2.0 ≠ 0.2.2`。所以：
+
+1. 门禁判定「不兼容」→ bundle 被跳过（`skippedBundles`），**不报错、不崩，只是不加载**；
+2. 依赖还在 `node_modules` 里，`package.json` 里也还写着——所以看起来「装着呢」。
+
+同一天另一次安装的日志里能看到同一机制对别的插件生效：
+
+```
+dsh: warning: Plugin @dshgzq/dsh-agent-team-remove@1.0.0 is incompatible with dsh 0.2.2-rc.1 ...
+dsh: it stays installed but profile startup denies it until you grant an exemption
+```
+
+#### 修法：声明 `engines.dsh`
+
+```json
+"engines": { "dsh": "^0.2.2-rc.1" },
+"peerDependencies": {
+  "@deepseek-ai/cordis": "^4.0.1",
+  "@deepseek-ai/dsh-tools": "^0.1.5-alpha.1 || ... || ^0.2.0-rc.1 || ^0.2.1-rc.1 || ^0.2.2-rc.1"
+}
+```
+
+`engines.dsh` 是**单一真值**：声明了它就只看它，peer 列表不再参与判定。
+peer 里同时补上 `^0.2.1-rc.1` 与 `^0.2.2-rc.1`，是为了让没读 `engines` 的旧工具链
+也不会误判。
+
+#### 顺带查明：不是我们被摘了，是 bundles 被重写过
+
+profile 的 `dsh.profile.bundles` 在 `2026-11-09 12:33` 那次改写里丢了 `dsh-puzzle-mode`
+（10-18 的备份里还在）。**bundles 是唯一决定加载哪些插件的清单**，依赖在不在无关紧要。
+已加回，并留着 `package.json.bak-before-puzzle-readd-*` 备份。
+
+#### 契约核对（新宿主 0.2.2-rc.1，只读 Inspect）
+
+| 项 | 结论 |
+| --- | --- |
+| `defineTool` 的 `output.schema` + `output.render` | 仍是必填，本插件**本来就这么写**，无需改 |
+| `tools.register/restrict/get/execute/guard` | 契约未变 |
+| `systemPrompt.section/context` | 契约未变 |
+| `sessionController.resolveAgent/prompt/cancel/fork/modelCatalog` | 契约未变 |
+| 客户端 `layout / slots / uiWorkspace / workspaces / sessions` | 全部存在 |
+| `sidebar.panellist` / `main` 槽位注册字段 | 未变（`{id,order,label}` / `{key}`） |
+| `conversation.content` | 是 **Component Factory** 不是 Slot，仍在（`factory:conversation.content` 可查） |
+| `conversation.session` 子槽位 | 仍在 |
+| `inputActions` 标准 prop | `main` 槽位本来就没有，插件早已按可空处理 |
+
+结论：**代码一行都不用改**，要改的只有 manifest 的版本声明。
+
+#### 验证（真装真加载，不是离线自证）
+
+```
+plugin_manager → include:dsh-puzzle-mode  enabled:true  fiberPhase:active
+Slots(sidebar.panellist) → registrant:"dsh-puzzle-mode" id:"puzzle" active:true
+Slots(main)             → registrant:"dsh-puzzle-mode" key:"puzzle"  active:true
+Slots(main).children    → puzzle.build.chat (single, session) 已声明
+entry 总数              → 207 → 208
+```
+
+冒烟 66 项通过、跨插件 18/0、安装规范 ✓、27 个 `lib/*.js` 语法全过。
+
+#### 未验证
+
+**没有真的点开面板走一遍。** 上面是宿主自己的 Inspect 接口读到的注册状态
+（槽位 occupant、fiber 相位、entry 启用态），属于「插件已挂载且声明生效」；
+面板内的交互、动效、派单链路没有实机点过。
+
+---
+
 ### v2.4.20 · 澄清器把「回写文档」写进执行交代
 
 > 用户原话：「为什么澄清器后面出的提示词是叫执行回写文档，不应该是全局大脑吗」
