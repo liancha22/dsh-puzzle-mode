@@ -1823,8 +1823,16 @@ try {
     assert.ok(body.length > 200, '浮窗函数体太短，取区段可能失败')
     assert.ok(!/theme/i.test(body), '浮窗里不许出现主题（主题是全局的，在面板里）')
     assert.ok(!/update/i.test(body), '浮窗里不许出现更新（更新是整包的，在面板里）')
-    // 必须真的读文档
-    assert.ok(/method: 'main'/.test(body), '浮窗必须拉主文档')
+    /**
+     * 必须真的拉主文档。
+     *
+     * v2.5.5 起走 `sessionMode action:'doc'`，不再用 `method:'main'`
+     * ——后者用的是**面板**的根，而会话模式的项目在会话自己的工作目录下，
+     * 用它会永远读到空文档（真机截图确认过）。
+     * 所以这里钉的是「有没有拉文档」这个不变量，不钉具体通道名。
+     */
+    assert.ok(/action: 'doc'/.test(body), '浮窗必须拉主文档（走会话自己的根）')
+    assert.ok(!/method: 'main'/.test(body), '不许用 method:main——那是面板的根，读不到会话下的项目')
   })
 
   /**
@@ -1844,6 +1852,196 @@ try {
     const smIdLine = /var SESSION_MODE_BUTTON_ID = '([^']+)'/.exec(src)
     assert.ok(panelIdLine !== null && smIdLine !== null, '两个 id 常量都要在')
     assert.notEqual(panelIdLine[1], smIdLine[1], '两个模式的槽位 id 不能相同')
+  })
+  /**
+   * **项目列表来自会话自己的工作目录，不是面板的数据工作区**（v2.5.3）。
+   *
+   * 用户原话：「会话模式绑定拼图文档应该不跟着面板模式的才对，从当前会话工作区扫描」
+   *
+   * 这条是负控性质，钉三件事：
+   *   ① 宿主 handler **不再接收**路由传来的 `projectRoot`（那就是面板的根）；
+   *   ② handler 内部不出现 `boundProjects`（它会读面板的 openProject）；
+   *   ③ 客户端**不再**去问面板的 `state` 要项目列表。
+   */
+  check('会话模式：项目来自会话工作目录，不跟着面板走', () => {
+    const src = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+    const a = src.indexOf('async function rpcSessionMode(')
+    assert.ok(a > 0, '必须存在 rpcSessionMode')
+    const b = src.indexOf('\nasync function ', a + 10)
+    const body = src.slice(a, b > 0 ? b : undefined)
+
+    assert.ok(
+      !/\(\{ ctx, body, res, projectRoot/.test(body),
+      '不许接收路由的 projectRoot——那就是面板的数据工作区根',
+    )
+    assert.equal(
+      (body.match(/boundProjects/g) || []).length,
+      0,
+      '不许用 boundProjects——它会把面板 openProject 提到第一位',
+    )
+    assert.ok(/sessionProjectRootOf\(/.test(body), '必须走「会话自己的工作目录」那条路')
+    assert.ok(/workingDirectory/.test(src), '宿主必须用 workingDirectory 服务取会话目录')
+
+    // state 响应必须自带 projects，客户端才不必再问面板
+    assert.ok(/projects: names/.test(body), 'state 响应必须直接给 projects')
+
+    // 客户端不许再问面板的 state
+    const csrc = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    assert.ok(
+      !/method: 'state', sessionId: sid/.test(csrc),
+      '客户端不许再问面板 state（问了只会又拿到面板的根）',
+    )
+  })
+
+  /**
+   * **浮窗要在会话面板内居中**（v2.5.3）。
+   *
+   * 用户原话：「居中应该是在会话框内居中才对」。
+   *
+   * `shell.overlay` 是整窗浮层，`top:50%;left:50%` 得到的是**窗口**中心；
+   * 左边有会话列表 sidebar，所以视觉上偏右。必须运行时量出会话面板的矩形。
+   */
+  check('会话模式：浮窗按会话面板的矩形居中，量不到退回窗口居中', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+
+    assert.ok(/function sessionPanelRect\(/.test(src), '必须量会话面板矩形')
+    assert.ok(/function sessionPanelCenterStyle\(/.test(src), '必须按面板矩形算中心')
+    assert.ok(/getBoundingClientRect/.test(src), '必须用 getBoundingClientRect 实测')
+
+    // 浮窗必须把量到的位置应用到 style 上
+    const fStart = src.indexOf('function SessionModeFloat(')
+    const fEnd = src.indexOf('\n    /* ----', fStart)
+    const flt = src.slice(fStart, fEnd > 0 ? fEnd : undefined)
+    assert.ok(/sessionPanelCenterStyle\(\)/.test(flt), '浮窗必须调用量中心')
+    assert.ok(/style: centerStyle === null \? undefined : centerStyle/.test(flt),
+      '量到就写 left/top；量不到必须留 undefined（退回 CSS 窗口居中，不编假位置）')
+  })
+  /**
+   * **会话模式读主文档也必须用会话自己的根**（v2.5.5 真机 bug）。
+   *
+   * 真机表现：项目能列出来，但点进去「主文档是空的」。
+   * 根因是客户端调的是 `method:'main'` —— 那个 handler 用**面板**的
+   * `projectRoot` 拼路径，而项目实际在会话自己的工作目录下，所以永远读不到。
+   *
+   * 这条钉两件事：
+   *   ① 宿主有 `action:'doc'` 且它用 `own.root`（不是路由的 projectRoot）；
+   *   ② 客户端不再用 `method:'main'`。
+   */
+  check('会话模式：读主文档走会话自己的根（不是面板的 main）', () => {
+    const idx = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+    const a = idx.indexOf('async function rpcSessionMode(')
+    const b = idx.indexOf('\nasync function ', a + 10)
+    const body = idx.slice(a, b > 0 ? b : undefined)
+
+    assert.ok(/action === 'doc'/.test(body), '必须有 doc 动作')
+    // doc 分支必须用 own.root 读，而不是路由的 projectRoot
+    const docAt = body.indexOf("action === 'doc'")
+    const docBlock = body.slice(docAt, docAt + 2000)
+    assert.ok(/readMainDoc\(own\.root, name\)/.test(docBlock),
+      'doc 必须用会话自己的根读主文档（用 projectRoot 会读到空）')
+
+    const cli = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    assert.ok(!/method: 'main', sessionId: sid/.test(cli),
+      '客户端不许再调 method:main（那是面板的根）')
+    assert.ok(/action: 'doc'/.test(cli), '客户端必须走 action:doc')
+  })
+
+  /**
+   * 浮窗宽度要**克制**（用户反馈「扫描项目文档没那么宽」）。
+   *
+   * 判据用「比 720 窄」而不是写死一个数：720 是上一版被投诉的宽度。
+   * 后来要放五维条才调到 620——那仍然明显窄于 720，所以区间判据站得住，
+   * 而写死 480 会让每次调宽都误红（本轮的实际情况）。
+   */
+  check('会话模式：浮窗宽度克制（窄于被投诉的 720px）', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    const m = /\.dshpz-smbox\{[^}]*width:min\((\d+)px/.exec(src)
+    assert.ok(m !== null, '浮窗必须用 width:min(Npx, …)')
+    const w = Number(m[1])
+    assert.ok(w < 720, `浮窗宽度必须窄于 720px（现在 ${w}px）`)
+    assert.ok(w >= 420, `浮窗不能窄到放不下五维条（现在 ${w}px）`)
+  })
+
+  /**
+   * 浮窗里必须有**仪表盘**（用户：「看文档也要这种效果」）。
+   *
+   * 指的是面板二级页那套：健康性圆环 + 五维条 + 模块图块。
+   * 关键在**复用面板的组件**（`HeroRing` / `dimensionRow`）而不是另写一份——
+   * 两处各写一份必然漂移，症状是「同一个项目两个页显示不同的分」。
+   */
+  check('会话模式：浮窗含仪表盘（复用面板组件，不另写一份）', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    /**
+     * ⚠️ 必须**精确取到 SessionModeFloat 的函数体**。
+     *
+     * `src.indexOf('function SessionModeFloat(')` 到下一个 `/* ----` 是对的，
+     * 但早期版本我用过「到下一个 function」的取法，那会把后面的组件也吞进来，
+     * 于是断言可能命中**别处**的 class（比如面板自己的 `dshpz-tile`）。
+     * 变异测试证明过：不限定范围时，「把浮窗图块换成自造 class」抓不到。
+     */
+    const a = src.indexOf('function SessionModeFloat(')
+    assert.ok(a > 0, '必须存在 SessionModeFloat')
+    const b = src.indexOf('\n    /* ----', a)
+    assert.ok(b > a, '取不到 SessionModeFloat 的结束边界')
+    const flt = src.slice(a, b)
+
+    assert.ok(/h\(HeroRing/.test(flt), '健康性圆环必须复用 HeroRing 组件')
+    assert.ok(/dimensionRow\(/.test(flt), '五维条必须复用 dimensionRow')
+    assert.ok(/DIMENSION_KEYS/.test(flt), '五维必须用同一份 key 表')
+
+    /**
+     * ⚠️ **必须用面板的 class，不许自造一套**（v2.5.8）。
+     *
+     * 前几版我另写 `smhero` / `smtiles` / `smsechead`，结果与面板长得不一样，
+     * 用户一眼看出「效果都没搬完」。同一批 CSS 规则才等于同一套观感。
+     */
+    assert.ok(/className: 'dshpz-hero' \},/.test(flt), '健康性卡必须用面板的 .dshpz-hero')
+    assert.ok(/className: 'dshpz-sect' \}/.test(flt), '小节必须用面板的 .dshpz-sect')
+    assert.ok(/className: 'dshpz-secttitle' \}/.test(flt), '小节标题必须用面板的 .dshpz-secttitle')
+    assert.ok(/className: 'dshpz-grid' \}/.test(flt), '模块必须用面板的 .dshpz-grid')
+    /**
+     * 精确到 `className: 'dshpz-tile',`（带引号与逗号）：
+     * 只写 `dshpz-tile` 会匹配到 `dshpz-tilebar` / `dshpz-tilescore`，
+     * 于是「把图块换成自造 class」照样通过（变异证明过）。
+     */
+    assert.ok(/className: 'dshpz-tile',/.test(flt), '模块图块必须用面板的 .dshpz-tile')
+
+    // 反向：不许再出现自造的 sm 系列观感 class
+    assert.ok(!/className: 'dshpz-smhero/.test(flt), '不许自造 smhero（那会与面板长得不一样）')
+    assert.ok(!/className: 'dshpz-smtiles/.test(flt), '不许自造 smtiles')
+
+    /**
+     * **仪表盘要完整，不能只有圆环和条**（用户：「功能没有做完」）。
+     *
+     * 面板二级页那套有四块：健康性卡（含分档结论）、五维、规模档、模块图块。
+     * 第一版我只做了圆环 + 条 + 格，漏了结论文案与规模档，也漏了图块可点开——
+     * 用户看到的就是「功能没有做完」。这条把四块都钉住。
+     */
+    assert.ok(/healthVerdict\(/.test(flt), '健康性卡必须有分档结论（复用 healthVerdict）')
+    assert.ok(/className: 'dshpz-smsizechip'/.test(flt), '必须渲染规模档元素（dshpz-smsizechip）')
+    /**
+     * 图块必须**真的带点击切换**。只查 `openModule` 字样不够——
+     * 它在 state 定义里也出现，所以那版断言对「删掉 onClick」是瞎的（变异证明过）。
+     */
+    assert.ok(/setOpenModule\(open \? '' : name\)/.test(flt), '图块必须可点开看详情（onClick 里调 setOpenModule）')
+    assert.ok(/counts\.points/.test(flt), '展开后必须显示条目统计')
+
+    // 宿主侧必须把仪表盘数据一起返回（否则客户端拿不到）
+    const idx = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+    const ia = idx.indexOf("action === 'doc'")
+    const ib = idx.indexOf('action ===', ia + 10)
+    const doc = idx.slice(ia, ib > 0 ? ib : undefined)
+    /**
+     * ⚠️ 必须断言**真实取值**，不能只断言「有这个键」。
+     *
+     * 变异测试证明过：写成 `health:` 存在即通过时，把
+     * `health: summary.health` 改成 `health: 0` 依然能蒙混过关——
+     * 而那就是「圆环永远显示 0%」的 bug。
+     */
+    assert.ok(/health:\s*summary\.health/.test(doc), 'health 必须取自 summarize 的真实值（不能写死 0）')
+    assert.ok(/dimensions:\s*summary\.dimensions/.test(doc), 'dimensions 必须取自 summarize（不能给空对象）')
+    assert.ok(/modules:\s*Array\.isArray\(summary\.modules\)/.test(doc), 'modules 必须取自 summarize')
+    assert.ok(/summarize\(/.test(doc), '必须复用 summarize（同一套读数算法）')
   })
 } finally {
   rmSync(home, { recursive: true, force: true })

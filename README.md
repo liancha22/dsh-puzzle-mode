@@ -12,7 +12,7 @@
 
 - 仓库：<https://github.com/liancha22/dsh-puzzle-mode>
 - 主题仓库：<https://github.com/liancha22/dsh-puzzle-themes>（主题**不在插件包里**，在面板主题页点一下从仓库下）
-- 最新版：**v2.5.2** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
+- 最新版：**v2.5.8** · [更新日志](CHANGELOG.md) · [所有版本](https://github.com/liancha22/dsh-puzzle-mode/releases)
 - 适配：`@deepseek-ai/cordis ^4.0.1`；DSH 运行时 **`^0.2.2-rc.1`**（声明在 `engines.dsh`）。`peerDependencies` 里的 `@deepseek-ai/dsh-tools` 范围照抄自 `package.json`——那是兼容**声明**，不是逐版本实测清单
 - **面板逐块说明**：[UI.md](UI.md) —— 每颗按钮、每个区块点了会怎样
 - 整份一图流：[`.github/images/ui-tutorial.png`](.github/images/ui-tutorial.png)
