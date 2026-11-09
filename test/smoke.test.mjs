@@ -1613,6 +1613,126 @@ try {
     assert.ok(registered.hooks.length > 0, '宿主半必须注册钩子')
     assert.ok(registered.routes.includes('/puzzle-mode-rpc'), '必须注册面板的数据通道')
   })
+
+  /* ---------- ⑨ 会话模式（v2.5.0，还原 v1.x 的输入框按钮） ---------- */
+
+  /**
+   * 用户要求：**两个模式并存**，面板模式常驻，会话模式**默认不启用**。
+   *
+   * 这条钉的是「默认值」这个最容易写反的东西：`sessionMode` 缺失时必须读成
+   * **空表**（一个会话都没启用）。写反了不会报错，只会让所有人一打开会话就
+   * 带着拼图工具——而这正是用户明确不要的默认态。
+   */
+  check('会话模式：默认不启用，且一个会话都没登记', () => {
+    const fresh = barrel.readSettings()
+    assert.equal(typeof fresh.sessionMode, 'object', 'sessionMode 必须是对象（会话 id → 项目）')
+    assert.equal(Object.keys(fresh.sessionMode).length, 0, '默认必须一个会话都没启用')
+    assert.equal(barrel.sessionModeOf('session-does-not-exist'), null, '未启用的会话必须读成 null')
+  })
+
+  /**
+   * 启用 / 换项目 / 关闭 三条路要能串起来，且**互不越界**。
+   *
+   * 尤其钉两件事：
+   *   ① `enableSessionMode` 幂等——重复点按钮不能把已选的项目冲掉；
+   *   ② 会话模式的项目与面板的 `openProject` **各管各的**（用户拍板）。
+   *      这条最容易在实现里图省事复用同一个字段，而症状是「改一边另一边也动」。
+   */
+  check('会话模式：启用 / 换项目 / 关闭，且与面板 openProject 互不影响', () => {
+    const sid = 'session-smoke-1'
+    const before = barrel.readSettings().openProject
+
+    const on = barrel.enableSessionMode(sid)
+    assert.equal(on.ok, true, '必须能启用')
+    assert.equal(on.already, false, '首次启用不是 already')
+    assert.deepEqual(barrel.sessionModeOf(sid), { project: '' }, '刚启用时项目为空（还没选）')
+
+    // 幂等：再启用一次不能报错，也不能清掉已选项目
+    barrel.setSessionModeProject(sid, '冒烟项目')
+    const again = barrel.enableSessionMode(sid)
+    assert.equal(again.already, true, '重复启用必须是 already')
+    assert.equal(barrel.sessionModeOf(sid).project, '冒烟项目', '重复启用不能冲掉已选项目')
+
+    // 与面板互不影响
+    assert.equal(barrel.readSettings().openProject, before, '会话模式不能改动面板的 openProject')
+
+    const off = barrel.disableSessionMode(sid)
+    assert.equal(off.ok, true)
+    assert.equal(off.wasOn, true, '关掉时必须如实回报原来开着')
+    assert.equal(barrel.sessionModeOf(sid), null, '关掉后必须读成 null')
+
+    const offAgain = barrel.disableSessionMode(sid)
+    assert.equal(offAgain.wasOn, false, '重复关掉必须说「本来就没开」')
+  })
+
+  /**
+   * **启用才装工具**：RPC 的 `enable` 分支必须先 `resolveAgent` 拿到 agent
+   * 再 `installSessionTools`，且**装失败不登记**。
+   *
+   * 为什么这条重要：顺序反了会造出「名单里有、实际没装」的假记录——
+   * 钩子于是去管一个没有 `puzzle_mode` 的会话，模型照规则调工具然后撞「不存在」。
+   */
+  check('会话模式：启用必须先真的装上工具，装失败不登记', () => {
+    const src = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+    const at = src.indexOf('async function rpcSessionMode(')
+    assert.ok(at > 0, '必须存在 rpcSessionMode')
+    const end = src.indexOf('\nasync function ', at + 10)
+    const body = src.slice(at, end > 0 ? end : undefined)
+
+    assert.ok(/installSessionTools\(agent\)/.test(body), 'enable 必须真的调 installSessionTools')
+    assert.ok(/resolveAgent\(/.test(body), 'enable 必须先 resolveAgent 拿到 agent')
+
+    // 顺序：install 必须在 enableSessionMode 之前（装失败就不登记）
+    const iInstall = body.indexOf('installSessionTools(agent)')
+    const iEnable = body.indexOf('enableSessionMode(sessionId)')
+    assert.ok(iInstall > 0 && iEnable > 0, '两处都要在')
+    assert.ok(iInstall < iEnable, '必须「先装工具、装成了再登记」——反了会造出假的已装记录')
+
+    // 装失败要提前 return（不落到 enableSessionMode）
+    const gap = body.slice(iInstall, iEnable)
+    assert.ok(/ok !== true[\s\S]{0,400}?return/.test(gap), '装上失败必须 return，不能继续登记')
+  })
+
+  /**
+   * 浮窗**只有文档视图**（用户明确要求：不给主题页、更新页）。
+   *
+   * 这条是负控性质：把主题/更新塞进 `SessionModeFloat` 就会红。
+   * 判据取「浮窗函数体内有没有引用 theme/update」——它们在面板里是正常功能，
+   * 在浮窗里就是语义错位（用户会以为「在这个会话里换主题/升级」）。
+   */
+  check('会话模式：浮窗里不许有主题页与更新页', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    const at = src.indexOf('function SessionModeFloat(')
+    assert.ok(at > 0, '必须存在 SessionModeFloat')
+    // 取到下一个顶层 function 为止
+    const end = src.indexOf('\n    function ', at + 10)
+    const body = src.slice(at, end > 0 ? end : undefined)
+
+    assert.ok(body.length > 200, '浮窗函数体太短，取区段可能失败')
+    assert.ok(!/theme/i.test(body), '浮窗里不许出现主题（主题是全局的，在面板里）')
+    assert.ok(!/update/i.test(body), '浮窗里不许出现更新（更新是整包的，在面板里）')
+    // 必须真的读文档
+    assert.ok(/method: 'main'/.test(body), '浮窗必须拉主文档')
+  })
+
+  /**
+   * 两个模式必须**真的并存**：面板的槽位与会话模式的槽位同时在 `apply` 里注册。
+   *
+   * 判据用像素级事实——注册语句本身。删掉任何一边都会红。
+   */
+  check('两个模式并存：面板槽位与会话模式槽位都要注册', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    assert.ok(src.includes("slots.inject('sidebar.panellist'"), '面板模式：侧边栏入口必须还在')
+    assert.ok(src.includes("slots.inject('main'"), '面板模式：主区面板必须还在')
+    assert.ok(src.includes("slots.inject('conversation.input.left'"), '会话模式：输入框按钮必须注册')
+    assert.ok(src.includes("id: SESSION_MODE_BUTTON_ID"), '会话模式按钮必须用自己独立的槽位 id')
+
+    // 面板的 id 与会话模式的 id 必须不同（同 id 会让侧边栏按钮与输入框按钮互相顶掉）
+    const panelIdLine = /var PANEL_ID = '([^']+)'/.exec(src)
+    const smIdLine = /var SESSION_MODE_BUTTON_ID = '([^']+)'/.exec(src)
+    assert.ok(panelIdLine !== null && smIdLine !== null, '两个 id 常量都要在')
+    assert.notEqual(panelIdLine[1], smIdLine[1], '两个模式的槽位 id 不能相同')
+  })
 } finally {
   rmSync(home, { recursive: true, force: true })
 }
