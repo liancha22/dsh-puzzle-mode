@@ -1694,6 +1694,119 @@ try {
   })
 
   /**
+   * **两步流程**（用户原话：「点按钮弹浮窗后再从浮窗里按按钮启用」）。
+   *
+   * 外层按钮**只开关浮窗，不许调 `action:'enable'`**；启用必须发生在浮窗内部。
+   * 这条是负控性质：把 enable 的 post 挪回外层按钮就会红。
+   *
+   * 为什么值得钉：这两步的差别是「用户有没有机会在装工具之前看一眼」。
+   * 合成一步不会报错、不会崩，只是用户失去了反悔的时机——静默的行为偏差。
+   */
+  check('会话模式：外层按钮只开关浮窗，启用只能在浮窗里按', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+
+    const bStart = src.indexOf('function SessionModeButton(')
+    const bEnd = src.indexOf('\n    /**', bStart)
+    assert.ok(bStart > 0 && bEnd > bStart, '取不到 SessionModeButton 函数体')
+    const btn = src.slice(bStart, bEnd)
+    assert.ok(!/action: 'enable'/.test(btn), '外层按钮不许直接调 enable（必须先弹浮窗）')
+    /**
+     * 按钮必须写**模块级 store**（v2.5.2）：浮窗挂在 `shell.overlay`、
+     * 是另一棵 React 树，局部 state 传不过去。
+     *
+     * 这条同时钉住了「浮窗不再渲染在按钮里」这个根因——
+     * 上一版正是渲染在按钮里，才被输入框容器的 transform 拽到右下角。
+     */
+    assert.ok(/sessionModeUi = \{ sessionId: sid, open: nextOpen/.test(btn), '按钮点击必须写共享 store（浮窗在另一个槽位）')
+    assert.ok(!/h\(SessionModeFloat/.test(btn), '按钮里不许再渲染浮窗（容器 transform 会让 fixed 定位失效）')
+
+    const fStart = src.indexOf('function SessionModeFloat(')
+    const fEnd = src.indexOf('\n    /* ----', fStart)
+    assert.ok(fStart > 0 && fEnd > fStart, '取不到 SessionModeFloat 函数体')
+    const flt = src.slice(fStart, fEnd)
+    assert.ok(/action: 'enable'/.test(flt), '浮窗里必须有启用动作')
+    assert.ok(/sessionmode-enable/.test(flt), '浮窗里必须有那颗启用按钮')
+  })
+
+  /**
+   * 浮窗必须挂在**帧级浮层** `shell.overlay`，且经独立的宿主组件渲染。
+   *
+   * 这条是这次「没居中」的根因钉：浮窗如果渲染在按钮的 React 子树里，
+   * 输入框容器的 `transform` 会让 `position:fixed` 相对容器定位，
+   * 于是居中失效、跑到右下角（真机两次截图都是这个症状）。
+   */
+  check('会话模式：浮窗挂在 shell.overlay，不渲染在按钮子树里', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    assert.ok(/slots\.inject\('shell\.overlay'/.test(src), '必须注册 shell.overlay 槽位')
+    assert.ok(/function SessionModeOverlay\(/.test(src), '必须有独立的浮层宿主组件')
+    assert.ok(/SESSION_MODE_FLOAT_ID/.test(src), '浮窗槽位 id 必须独立于按钮 id')
+
+    /**
+     * `shell.overlay` 注册的**组件必须就是** `SessionModeOverlay`。
+     *
+     * 只断言「有这个函数」是不够的——可以把它写好却注册别的（或就地内联一个
+     * 直接渲染浮窗的匿名组件），那样 `position:fixed` 又会相对容器定位。
+     * 这条是那个漏网的补丁：变异测试证明过，缺了它「绕过宿主组件」抓不到。
+     */
+    assert.ok(
+      /slots\.register\(\{ name: 'shell\.overlay', id: SESSION_MODE_FLOAT_ID, order: \d+ \}, SessionModeOverlay\)/.test(src),
+      'shell.overlay 必须注册 SessionModeOverlay 本体（不能内联别的组件）',
+    )
+
+    // 浮层宿主从模块级 store 读开关
+    const oStart = src.indexOf('function SessionModeOverlay(')
+    const oEnd = src.indexOf('\n    function ', oStart + 10)
+    const overlay = src.slice(oStart, oEnd > 0 ? oEnd : undefined)
+    assert.ok(/sessionModeUi\.open/.test(overlay), '宿主必须从模块级 store 读开态')
+    assert.ok(/h\(SessionModeFloat/.test(overlay), '宿主负责渲染浮窗本体')
+  })
+
+  /**
+   * 浮窗**不带遮罩**（用户明确要求「不要遮罩」），且**不能固定在右下角**
+   * （上一版那样会盖住输入框）。
+   *
+   * 判据取 CSS 文本：既不能有全屏 `inset:0` 式遮罩，也不能有 `right/bottom` 贴角定位。
+   */
+  check('会话模式：浮窗无遮罩、也不贴右下角', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+
+    assert.ok(!/dshpz-smbackdrop/.test(src), '不许有遮罩层')
+    assert.ok(!/dshpz-smfloat\{position:fixed;right:/.test(src), '不许再贴右下角（会盖住输入框）')
+
+    // 居中浮动：宿主容器用 translate 定到视口中央
+    assert.ok(
+      /\.dshpz-smhost\{position:fixed;top:50%;left:50%;transform:translate\(-50%,-50%\)/.test(src),
+      '浮窗必须居中定位',
+    )
+    // 不能挡住下面界面：只有面板本体重新打开 pointer-events
+    assert.ok(
+      /\.dshpz-smhost\{[^}]*pointer-events:none/.test(src),
+      '宿主容器必须 pointer-events:none（否则会挡住下面的界面，等于隐形遮罩）',
+    )
+    assert.ok(
+      /\.dshpz-smbox\{pointer-events:auto/.test(src),
+      '面板本体必须 pointer-events:auto（否则点不动）',
+    )
+  })
+
+  /**
+   * 浮窗**未启用时也要列项目**：用户要先看清「这里能看什么」再决定按不按启用。
+   *
+   * 这条钉的是「两步流程」里第一步的信息完整度——未启用态只显示一句话就失去了
+   * 让用户先看一眼的意义。
+   */
+  check('会话模式：未启用时浮窗也要列出项目（先看清再决定）', () => {
+    const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
+    const fStart = src.indexOf('function SessionModeFloat(')
+    const fEnd = src.indexOf('\n    /* ----', fStart)
+    const flt = src.slice(fStart, fEnd)
+
+    assert.ok(/enabled !== true/.test(flt), '必须有未启用分支')
+    const offBranch = flt.slice(flt.indexOf('if (enabled !== true)'))
+    assert.ok(/st\.projects\.map/.test(offBranch.slice(0, 1800)), '未启用分支必须也列项目')
+  })
+
+  /**
    * 浮窗**只有文档视图**（用户明确要求：不给主题页、更新页）。
    *
    * 这条是负控性质：把主题/更新塞进 `SessionModeFloat` 就会红。
@@ -1704,8 +1817,7 @@ try {
     const src = readFileSync(join(root, 'lib', 'client.js'), 'utf8')
     const at = src.indexOf('function SessionModeFloat(')
     assert.ok(at > 0, '必须存在 SessionModeFloat')
-    // 取到下一个顶层 function 为止
-    const end = src.indexOf('\n    function ', at + 10)
+    const end = src.indexOf('\n    /* ----', at)
     const body = src.slice(at, end > 0 ? end : undefined)
 
     assert.ok(body.length > 200, '浮窗函数体太短，取区段可能失败')
